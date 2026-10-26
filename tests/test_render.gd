@@ -47,7 +47,7 @@ func run():
 	await process_frame
 	await process_frame
 	await RenderingServer.frame_post_draw
-	root.get_texture().get_image().save_png("res://build/physical-mode-v0.7.0.png")
+	root.get_texture().get_image().save_png("res://build/physical-mode-v0.8.0.png")
 	app.moons_toggle.button_pressed = false
 	await process_frame
 	await RenderingServer.frame_post_draw
@@ -76,13 +76,62 @@ func run():
 		push_error("Night-side fill did not brighten the rendered surface")
 		failures += 1
 	print("Night-side center luminance: ",dark," -> ",filled)
-	filled_image.save_png("res://build/night-side-v0.7.0.png")
+	filled_image.save_png("res://build/night-side-v0.8.0.png")
 	app._select(5)
 	app._satellite_system()
 	await process_frame
 	await RenderingServer.frame_post_draw
-	root.get_texture().get_image().save_png("res://build/adjust-mode-v0.7.0.png")
-	print("RENDER: ","PASS" if failures==0 else "FAIL", " (real geometry; both scale modes; compression; visibility; navigation; night fill)")
+	root.get_texture().get_image().save_png("res://build/adjust-mode-v0.8.0.png")
+	app._activate_view("galaxy")
+	app._set_scale_mode(true)
+	app._set_distance_compression(50.0)
+	app.distance = app.target_distance
+	app._update_camera(1.0)
+	await process_frame
+	await RenderingServer.frame_post_draw
+	root.get_texture().get_image().save_png("res://build/galactic-scale-v0.8.0.png")
+	# Inspect the actual submitted GPU mesh, including its live-body endpoints.
+	for i in range(9):
+		var vertices = app.trail_instance.mesh.surface_get_arrays(i)[Mesh.ARRAY_VERTEX]
+		if vertices.is_empty() or vertices[-1].distance_to(app.bodies[i].position)>0.00001:
+			push_error("Planet trajectory misses its current position")
+			failures += 1
+	app.moon_path_buttons.trails.pressed.emit()
+	app.moon_trail_key.clear()
+	var started = Time.get_ticks_usec()
+	app._draw_moon_trails()
+	print("20 satellite trail rebuild (ms): ",(Time.get_ticks_usec()-started)/1000.0)
+	for mode in ["galaxy","system"]:
+		app._activate_view(mode)
+		app._select(5)
+		app._satellite_system()
+		app._update_bodies()
+		app._refresh_paths()
+		for i in range(20):
+			var vertices = app.moon_trail_instance.mesh.surface_get_arrays(i)[Mesh.ARRAY_VERTEX]
+			if vertices.size()!=512 or vertices[-1].distance_to(app.moon_nodes[i].position)>0.00001:
+				push_error("Satellite GPU trail misses its current position")
+				failures += 1
+		await process_frame
+		await RenderingServer.frame_post_draw
+		root.get_texture().get_image().save_png("res://build/satellite-trails-%s-v0.8.0.png" % mode)
+	app.moons_toggle.button_pressed = false
+	await process_frame
+	if app.moon_trail_instance.visible:
+		push_error("Satellite switch leaves GPU trails visible")
+		failures += 1
+	app.moons_toggle.button_pressed = true
+	app.moon_path_buttons.orbits.pressed.emit()
+	app._set_scale_mode(false)
+	app._select(3)
+	await process_frame
+	await RenderingServer.frame_post_draw
+	root.get_texture().get_image().save_png("res://build/controls-v0.8.0.png")
+	var nav_bottom: float = app.navigation_box.get_parent().get_global_rect().end.y
+	if nav_bottom>root.get_visible_rect().size.y-112.0:
+		push_error("Navigation overlaps the time controls")
+		failures += 1
+	print("RENDER: ","PASS" if failures==0 else "FAIL", " (real geometry; compressed flight; satellite orbits/trails; GPU endpoints; UI layout; night fill)")
 	app.queue_free()
 	await process_frame
 	DirAccess.remove_absolute("user://test-render.cfg")

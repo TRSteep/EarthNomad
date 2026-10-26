@@ -5,7 +5,8 @@ const Satellites = preload("res://scripts/satellites.gd")
 const IDS = ["sun", "mercury", "venus", "earth", "mars", "jupiter", "saturn", "uranus", "neptune"]
 const NAMES = ["Солнце", "Меркурий", "Венера", "Земля", "Марс", "Юпитер", "Сатурн", "Уран", "Нептун"]
 const KINDS = ["ЗВЕЗДА · G2V", "КАМЕННАЯ ПЛАНЕТА", "КАМЕННАЯ ПЛАНЕТА", "НАШ ДОМ", "КАМЕННАЯ ПЛАНЕТА", "ГАЗОВЫЙ ГИГАНТ", "ГАЗОВЫЙ ГИГАНТ", "ЛЕДЯНОЙ ГИГАНТ", "ЛЕДЯНОЙ ГИГАНТ"]
-const RADII = [695700.0,2439.7,6051.8,6371.0,3389.5,69911.0,58232.0,25362.0,24622.0]
+# Mean radii (JPL); the Sun uses the IAU nominal photospheric radius.
+const RADII = [695700.0,2439.4,6051.8,6371.0084,3389.5,69911.0,58232.0,25362.0,24622.0]
 const TILTS = [7.25,0.034,2.64,23.44,25.19,3.13,26.73,82.23,28.32]
 const ROTATIONS = [609.12,1407.6,-5832.5,23.9345,24.6229,9.925,10.656,-17.24,16.11]
 const COLORS = [Color("ffd69a"),Color("b4afa9"),Color("dec69b"),Color("71c9ec"),Color("dc9473"),Color("d7b190"),Color("e6d1a2"),Color("9cdfdf"),Color("658eee")]
@@ -17,8 +18,10 @@ const VISUAL_SCALE_MAX = 50.0
 const DEFAULT_PLANET_SCALE = 3.0
 const DEFAULT_SUN_SCALE = 2.0
 const DEFAULT_MOON_SCALE = 4.0
-const DISPLAY_SETTINGS_VERSION = 5
+const DISPLAY_SETTINGS_VERSION = 6
 const MOON_ORBIT_DASHES = 96
+const MOON_TRAIL_PERIODS = 4.0
+const MOON_TRAIL_STEPS = 256
 const SETTINGS_PATH = "user://display.cfg"
 const SPEEDS = [0.000011574074,0.0416667,1.0,10.0,40.0,120.0]
 const SPEED_LABELS = ["Реальное время", "1 час / сек", "1 день / сек", "10 дней / сек", "40 дней / сек", "120 дней / сек"]
@@ -40,6 +43,8 @@ var atmospheres: Dictionary = {}
 var labels: Array[Label3D] = []
 var orbit_root = Node3D.new()
 var trail_instance = MeshInstance3D.new()
+var moon_trail_instance = MeshInstance3D.new()
+var moon_trail_key: Array = []
 var history: Array = []
 var last_sample = 0.0
 var trail_clock = 0.0
@@ -58,6 +63,7 @@ var helio_sun_scale = DEFAULT_SUN_SCALE
 var helio_moon_scale = DEFAULT_MOON_SCALE
 var labels_enabled = true
 var moons_enabled = true
+var moon_path_mode = "orbits"
 var playing = true
 var speed_index = 1
 var yaw = 0.0
@@ -92,6 +98,7 @@ var scale_heading: Label
 var navigation_box: VBoxContainer
 var view_buttons: Dictionary = {}
 var moons_toggle: CheckButton
+var moon_path_buttons: Dictionary = {}
 var physical_mode_button: Button
 var adjust_mode_button: Button
 var adjust_controls: VBoxContainer
@@ -113,6 +120,7 @@ func _ready():
 	_build_moons()
 	_build_orbits()
 	add_child(trail_instance)
+	add_child(moon_trail_instance)
 	_build_ui()
 	_select(3)
 	for argument in startup_args:
@@ -130,11 +138,16 @@ func _ready():
 		_activate_view("inner")
 	if "--physical" in startup_args:
 		_set_scale_mode(true)
+	if "--moon-trails" in startup_args:
+		_set_moon_path_mode("trails")
 	for argument in startup_args:
 		if argument.begins_with("--follow="):
 			_select(clampi(int(argument.get_slice("=",1)),0,8))
 	_update_bodies()
 	_update_camera(1.0)
+	if moon_path_mode=="trails":
+		_seed_history()
+	_refresh_paths()
 	if "--capture" in startup_args:
 		playing = false
 		pause_button.text = "▶  Продолжить"
@@ -373,7 +386,7 @@ func _update_moons():
 		var parent = int(d.parent)
 		var relative = satellites.position_km(i,jd)*KM_TO_SCENE
 		moon_nodes[i].visible = moons_enabled
-		moon_orbits[i].visible = moons_enabled and (overview or galaxy or (satellite_system_view and parent==selected))
+		moon_orbits[i].visible = moons_enabled and moon_path_mode=="orbits"
 		moon_orbits[i].position = bodies[parent].position
 		moon_orbits[i].scale = Vector3.ONE
 		moon_nodes[i].position = bodies[parent].position+relative
@@ -440,6 +453,8 @@ func _load_display_settings():
 		labels_enabled = saved_labels if saved_labels is bool else true
 		var saved_moons = settings.get_value("display","moons_enabled",true)
 		moons_enabled = saved_moons if saved_moons is bool else true
+		var saved_path = settings.get_value("display","moon_path_mode","orbits")
+		moon_path_mode = saved_path if saved_path in ["orbits","trails"] else "orbits"
 
 func _restore_default_sizes():
 	galaxy_planet_scale = DEFAULT_PLANET_SCALE
@@ -455,6 +470,7 @@ func _save_display_settings():
 	var settings = ConfigFile.new()
 	settings.set_value("display","labels_enabled",labels_enabled)
 	settings.set_value("display","moons_enabled",moons_enabled)
+	settings.set_value("display","moon_path_mode",moon_path_mode)
 	settings.set_value("display","schema",DISPLAY_SETTINGS_VERSION)
 	var error = settings.save(settings_path)
 	if error != OK:
@@ -529,21 +545,29 @@ func _sync_scale_controls():
 	_layout_scale_panel.call_deferred()
 
 func _set_scale_mode(physical: bool):
+	var previous_scale = _interplanet_scale()
 	actual_size = physical
+	_rescale_flight_overview(previous_scale)
 	_sync_scale_controls()
 	_update_bodies()
 	_ensure_follow_clearance()
-	if galaxy:
-		_draw_trails()
+	_refresh_paths()
 
 func _set_distance_compression(value: float):
 	if not actual_size:
 		return
+	var previous_scale = _interplanet_scale()
 	distance_compression = clampf(value,1.0,MAX_DISTANCE_COMPRESSION) if is_finite(value) else 1.0
+	_rescale_flight_overview(previous_scale)
 	_sync_scale_controls()
 	_update_bodies()
-	if galaxy:
-		_draw_trails()
+	_refresh_paths()
+
+func _rescale_flight_overview(previous_scale: float):
+	if galaxy and overview:
+		var ratio = _interplanet_scale()/previous_scale
+		distance *= ratio
+		target_distance *= ratio
 
 func _layout_scale_panel():
 	if not is_instance_valid(size_panel):
@@ -559,7 +583,32 @@ func _set_moons_enabled(enabled: bool):
 	_refresh_moon_picker()
 	_update_bodies()
 	_update_labels()
+	_sync_moon_path_buttons()
+	_refresh_paths()
 	settings_timer.start()
+
+func _set_moon_path_mode(mode: String):
+	if mode not in ["orbits","trails"]:
+		return
+	moon_path_mode = mode
+	if mode=="trails":
+		_seed_history()
+	_sync_moon_path_buttons()
+	_update_bodies()
+	_refresh_paths()
+	settings_timer.start()
+
+func _sync_moon_path_buttons():
+	for mode in moon_path_buttons:
+		moon_path_buttons[mode].set_pressed_no_signal(mode==moon_path_mode)
+		moon_path_buttons[mode].disabled = not moons_enabled or mode==moon_path_mode
+
+func _refresh_paths():
+	if galaxy:
+		_draw_trails()
+	moon_trail_instance.visible = moons_enabled and moon_path_mode=="trails"
+	if moon_trail_instance.visible:
+		_draw_moon_trails()
 
 func _set_labels_enabled(enabled: bool):
 	labels_enabled = enabled
@@ -591,10 +640,11 @@ func _update_bodies():
 	orbit_root.visible = overview and not galaxy
 	orbit_root.scale = Vector3.ONE*_interplanet_scale()
 	trail_instance.visible = galaxy
+	moon_trail_instance.visible = moons_enabled and moon_path_mode=="trails"
 	_update_moons()
 
 func _record_history():
-	history.append({"day":sim.elapsed,"p":sim.p.duplicate()})
+	history.append({"day":sim.elapsed,"p":sim.p.duplicate(),"v":sim.v.duplicate()})
 	if history.size() > 1200:
 		history.pop_front()
 	last_sample = sim.elapsed
@@ -611,7 +661,7 @@ func _seed_history():
 	for j in range(240):
 		for k in range(8):
 			past.step(-Physics.STEP)
-		history.push_front({"day":past.elapsed,"p":past.p.duplicate()})
+		history.push_front({"day":past.elapsed,"p":past.p.duplicate(),"v":past.v.duplicate()})
 	_record_history()
 	_draw_trails()
 
@@ -619,22 +669,98 @@ func _draw_trails():
 	if history.size() < 2:
 		return
 	var mesh = ImmediateMesh.new()
-	var offset_now = Physics.galactic_offset(sim.elapsed+sim.pending)
-	var origin = sim.position(0 if overview else selected)
 	for i in range(9):
 		mesh.surface_begin(Mesh.PRIMITIVE_LINE_STRIP)
 		for j in range(history.size()):
 			var point: Dictionary = history[j]
 			var p: PackedFloat64Array = point.p
-			var shift = Physics.galactic_offset(point.day) - offset_now
-			var pos = (Vector3(p[i*3],p[i*3+1],p[i*3+2])-origin)*_interplanet_scale()+shift
+			var pos = _trajectory_point(i,point.day,_relative_sample_position(i,p))
 			mesh.surface_set_color(Color(COLORS[i],lerpf(0.04,0.75,float(j)/history.size())))
-			mesh.surface_add_vertex(pos*SCALE)
+			mesh.surface_add_vertex(pos)
 		mesh.surface_set_color(Color(COLORS[i],0.8))
 		mesh.surface_add_vertex(bodies[i].position)
 		mesh.surface_end()
 	trail_instance.mesh = mesh
 	trail_instance.material_override = _line_material()
+
+func _relative_sample_position(body: int, positions: PackedFloat64Array) -> Vector3:
+	var origin = (0 if overview else selected)*3
+	var relative = Vector3.ZERO
+	for k in range(3):
+		# Subtract in float64 before converting to GPU/render coordinates.
+		relative[k] = positions[body*3+k]-(sim.p[origin+k]+sim.v[origin+k]*sim.pending)
+	return relative
+
+func _trajectory_point(body: int, day: float, relative_au: Vector3) -> Vector3:
+	var shift = Physics.galactic_offset(day)-Physics.galactic_offset(sim.elapsed+sim.pending) if galaxy else Vector3.ZERO
+	# Compress every component of the system's flight, preserving the shape of its
+	# helices. Local satellite offsets remain in real km, as in the live scene.
+	var point = (relative_au+shift)*(SCALE*_interplanet_scale())
+	if body==3:
+		point -= satellites.position_km(0,sim.epoch_jd+day)*(KM_TO_SCENE*0.0121505856)
+	return point
+
+func _history_relative_position(body: int, day: float) -> Vector3:
+	# Planet samples are two days apart, much longer than a Phobos orbit. Cubic
+	# Hermite interpolation supplies the moving parent at each satellite sample.
+	var low = 0
+	var high = history.size()-1
+	while low<high:
+		var mid = (low+high+1)/2
+		if history[mid].day<=day:
+			low = mid
+		else:
+			high = mid-1
+	var first: Dictionary = history[low]
+	var last: Dictionary = history[low+1] if low+1<history.size() else {"day":sim.elapsed+sim.pending,"p":sim.p,"v":sim.v}
+	var span: float = last.day-first.day
+	if span<=0.000000001:
+		return sim.relative_position(body,0 if overview else selected)
+	var t = clampf((day-first.day)/span,0.0,1.0)
+	var h00 = 2.0*t*t*t-3.0*t*t+1.0
+	var h10 = t*t*t-2.0*t*t+t
+	var h01 = -2.0*t*t*t+3.0*t*t
+	var h11 = t*t*t-t*t
+	var origin = (0 if overview else selected)*3
+	var relative = Vector3.ZERO
+	for k in range(3):
+		var index = body*3+k
+		var endpoint: float = last.p[index]
+		if low+1==history.size():
+			endpoint += sim.v[index]*sim.pending
+		var position: float = h00*first.p[index]+h10*span*first.v[index]+h01*endpoint+h11*span*last.v[index]
+		relative[k] = position-(sim.p[origin+k]+sim.v[origin+k]*sim.pending)
+	return relative
+
+func _moon_trajectory_point(index: int, day: float) -> Vector3:
+	var parent = int(satellites.data[index].parent)
+	var center = _trajectory_point(parent,day,_history_relative_position(parent,day))
+	return center+satellites.position_km(index,sim.epoch_jd+day)*KM_TO_SCENE
+
+func _draw_moon_trails():
+	if history.size()<2:
+		return
+	var now = sim.elapsed+sim.pending
+	var key = [now,galaxy,0 if overview else selected,_interplanet_scale(),history[0].day,history[-1].day]
+	if key==moon_trail_key:
+		return
+	moon_trail_key = key
+	var mesh = ImmediateMesh.new()
+	for i in range(moon_nodes.size()):
+		var begin = maxf(history[0].day,now-satellites.data[i].period_days*MOON_TRAIL_PERIODS)
+		var previous = _moon_trajectory_point(i,begin)
+		mesh.surface_begin(Mesh.PRIMITIVE_LINES)
+		for j in range(MOON_TRAIL_STEPS):
+			var progress = float(j+1)/MOON_TRAIL_STEPS
+			var next = _moon_trajectory_point(i,lerpf(begin,now,progress))
+			mesh.surface_set_color(Color(0.50,0.74,0.87,lerpf(0.08,0.65,float(j)/MOON_TRAIL_STEPS)))
+			mesh.surface_add_vertex(previous)
+			mesh.surface_set_color(Color(0.50,0.74,0.87,lerpf(0.08,0.65,progress)))
+			mesh.surface_add_vertex(next if j==MOON_TRAIL_STEPS-1 else previous.lerp(next,0.58))
+			previous = next
+		mesh.surface_end()
+	moon_trail_instance.mesh = mesh
+	moon_trail_instance.material_override = _line_material()
 
 func _process(delta: float):
 	if playing:
@@ -650,8 +776,8 @@ func _process(delta: float):
 	_update_camera(delta)
 	_update_labels()
 	trail_clock += delta
-	if galaxy and trail_clock > 0.07:
-		_draw_trails()
+	if (galaxy or (moons_enabled and moon_path_mode=="trails")) and trail_clock > 0.07:
+		_refresh_paths()
 		trail_clock = 0.0
 	_update_readout()
 	if "--capture" in startup_args:
@@ -666,7 +792,7 @@ func _update_camera(delta: float):
 	if selected_moon>=0 and not overview:
 		target = moon_nodes[selected_moon].position
 	if galaxy and overview:
-		target = Physics.galactic_offset(-240.0)*SCALE
+		target = Physics.galactic_offset(-240.0)*SCALE*_interplanet_scale()
 	var direction = Vector3(sin(yaw)*cos(pitch),sin(pitch),cos(yaw)*cos(pitch))
 	camera.position = target + direction*distance
 	# Keep a stable projection from physical moon close-ups to compressed overviews.
@@ -742,7 +868,7 @@ func _set_overview():
 	satellite_system_view = false
 	_refresh_moon_picker()
 	_sync_scale_controls()
-	target_distance = 2000.0 if galaxy else (95.0 if view_mode=="inner" else 1750.0)*_interplanet_scale()
+	target_distance = (2000.0 if galaxy else (95.0 if view_mode=="inner" else 1750.0))*_interplanet_scale()
 	pitch = 0.42 if galaxy else 0.85
 	yaw = 1.05 if galaxy else 0.3
 	for button in select_buttons:
@@ -752,7 +878,7 @@ func _set_overview():
 func _activate_view(mode: String):
 	view_mode = mode
 	galaxy = mode=="galaxy"
-	if galaxy:
+	if galaxy or moon_path_mode=="trails":
 		_seed_history()
 	_set_overview()
 
@@ -782,7 +908,9 @@ func _toggle_scale():
 
 func _reset():
 	var old_radius = _focus_radius()
+	var old_scale = _interplanet_scale()
 	_restore_default_sizes()
+	_rescale_flight_overview(old_scale)
 	_sync_scale_controls()
 	if not overview and not galaxy:
 		var ratio = _focus_radius()/old_radius
@@ -792,8 +920,10 @@ func _reset():
 	sim.reset()
 	history.clear()
 	last_sample = 0.0
-	if galaxy:
+	if galaxy or moon_path_mode=="trails":
 		_seed_history()
+	_update_bodies()
+	_refresh_paths()
 
 func _toggle_pause():
 	playing = not playing
@@ -957,7 +1087,7 @@ func _build_ui():
 	right.add_child(_label("ТЕЛЕМЕТРИЯ",12,Color("73929f")))
 	title_label = _label("Земля",30)
 	right.add_child(title_label)
-	detail_label = _label("",16)
+	detail_label = _label("",15)
 	right.add_child(detail_label)
 	right.add_child(HSeparator.new())
 	right.add_child(_view_button("↗  Галактический полёт","galaxy"))
@@ -972,13 +1102,24 @@ func _build_ui():
 	labels_toggle.toggled.connect(_set_labels_enabled)
 	right.add_child(labels_toggle)
 	moons_toggle = CheckButton.new()
-	moons_toggle.text = "Спутники и орбиты"
+	moons_toggle.text = "Спутники"
 	moons_toggle.custom_minimum_size.y = 44
 	moons_toggle.focus_mode = Control.FOCUS_NONE
 	moons_toggle.button_pressed = moons_enabled
 	moons_toggle.toggled.connect(_set_moons_enabled)
 	right.add_child(moons_toggle)
-	var note = _label("Solar System Scope · CC BY 4.0\nJPL / NASA · Модель приближённая",11,Color("73929f"))
+	var path_row = HBoxContainer.new()
+	right.add_child(path_row)
+	for mode in ["orbits","trails"]:
+		var button = _button("Орбиты" if mode=="orbits" else "Траектории",_set_moon_path_mode.bind(mode))
+		button.toggle_mode = true
+		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		button.add_theme_font_size_override("font_size",14)
+		button.tooltip_text = "Замкнутые орбиты спутников вокруг планет" if mode=="orbits" else "Следы спутников за четыре оборота с учётом движения планет"
+		path_row.add_child(button)
+		moon_path_buttons[mode] = button
+	_sync_moon_path_buttons()
+	var note = _label("SSS · CC BY 4.0 · JPL / NASA",11,Color("73929f"))
 	right.add_child(note)
 	var bottom = PanelContainer.new()
 	root.add_child(bottom)
@@ -1027,7 +1168,7 @@ func _scale_row(parent: VBoxContainer, caption: String, value: float, kind: Stri
 	slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	slider.custom_minimum_size = Vector2(100,44)
 	slider.focus_mode = Control.FOCUS_NONE
-	slider.tooltip_text = "Визуальное увеличение от 0.1× до 50×; орбиты и гравитация не меняются."
+	slider.tooltip_text = "Множитель реального радиуса от 0.1× до 50×. Например, радиус Земли при ×4 — 25 484 км. Орбиты не меняются."
 	slider.value_changed.connect(func(exponent): _set_size_control(snappedf(pow(2.0,exponent),0.1),kind))
 	row.add_child(slider)
 	var input = SpinBox.new()
@@ -1098,14 +1239,14 @@ func _update_readout():
 	frame_label.text = ("ГАЛАКТИЧЕСКИЙ ПОЛЁТ" if galaxy else "ГЕЛИОЦЕНТРИЧЕСКИЙ ВИД") + "   /   " + ("РАЗМЕРЫ 1:1" if actual_size else "РАЗМЕРЫ УВЕЛИЧЕНЫ")
 	if galaxy and not overview:
 		frame_label.text += "   /   СЛЕЖЕНИЕ"
-	scale_note.text = "Радиусы реальные · Межпланетные расстояния ÷ %.1f" % distance_compression if actual_size else "Радиусы × 0.1–50 · Все расстояния реальные"
+	scale_note.text = "Радиусы реальные · Межпланетные расстояния ÷ %.1f" % distance_compression if actual_size else "× от реального радиуса · Расстояния реальные"
 	title_label.text = NAMES[selected]
 	var radius_au = sim.position(selected).distance_to(sim.position(0))
 	var speed = 0.0
 	for k in range(3):
 		speed += pow(sim.v[selected*3+k]-sim.v[k],2)
 	speed = sqrt(speed)*Physics.AU_KM/86400.0
-	detail_label.text = "%s\n\nРадиус          %s км\nОт Солнца     %.3f а.е.\nСкорость       %.2f км/с\nНаклон оси    %.2f°\n\n%s\nΔE / E₀         %.8f" % [KINDS[selected],str(int(RADII[selected])),radius_au,speed,180.0-TILTS[selected] if selected in [2,7] else TILTS[selected],"9 тел  ·  шаг 6 часов",abs((sim.energy()-initial_energy)/initial_energy)]
+	detail_label.text = "%s\n\nРадиус          %s км\nОт Солнца     %.3f а.е.\nСкорость       %.2f км/с\nНаклон оси    %.2f°\n%s\nΔE / E₀         %.8f" % [KINDS[selected],str(int(RADII[selected])),radius_au,speed,180.0-TILTS[selected] if selected in [2,7] else TILTS[selected],"9 тел  ·  шаг 6 часов",abs((sim.energy()-initial_energy)/initial_energy)]
 	if selected_moon>=0:
 		var d: Dictionary = satellites.data[selected_moon]
 		title_label.text = d.name

@@ -2,6 +2,18 @@ extends RefCounted
 ## Approximate two-body satellite orbits, independent of the planetary integrator.
 var data: Array = JSON.parse_string(FileAccess.get_file_as_string("res://assets/satellites.json"))
 const OBLIQUITY = 23.4392911
+var orbit_bases: Array[Basis] = []
+
+func _init():
+	# Fixed mean elements: compute their frame once, not for every trail vertex.
+	for i in range(data.size()):
+		var d: Dictionary = data[i]
+		var node = deg_to_rad(d.node_deg)
+		var arg = deg_to_rad(d.arg_deg)
+		var inc = deg_to_rad(d.inclination_deg)
+		var x = Vector3(cos(arg)*cos(node)-sin(arg)*sin(node)*cos(inc),cos(arg)*sin(node)+sin(arg)*cos(node)*cos(inc),sin(arg)*sin(inc))
+		var y = Vector3(-sin(arg)*cos(node)-cos(arg)*sin(node)*cos(inc),-sin(arg)*sin(node)+cos(arg)*cos(node)*cos(inc),cos(arg)*sin(inc))
+		orbit_bases.append(frame(i)*Basis(x,y,x.cross(y)))
 
 static func equatorial_to_scene(v: Vector3) -> Vector3:
 	var e = deg_to_rad(OBLIQUITY)
@@ -34,13 +46,7 @@ func position_km(index: int, jd: float, path_angle: float = NAN) -> Vector3:
 		eccentric = path_angle
 	var x = d.a_km*(cos(eccentric)-d.e)
 	var y = d.a_km*sqrt(1.0-d.e*d.e)*sin(eccentric)
-	var node = deg_to_rad(d.node_deg)
-	var arg = deg_to_rad(d.arg_deg)
-	var inc = deg_to_rad(d.inclination_deg)
-	var r = Vector3((cos(arg)*cos(node)-sin(arg)*sin(node)*cos(inc))*x+(-sin(arg)*cos(node)-cos(arg)*sin(node)*cos(inc))*y,
-		(cos(arg)*sin(node)+sin(arg)*cos(node)*cos(inc))*x+(-sin(arg)*sin(node)+cos(arg)*cos(node)*cos(inc))*y,
-		sin(arg)*sin(inc)*x+cos(arg)*sin(inc)*y)
-	return frame(index)*r
+	return orbit_bases[index]*Vector3(x,y,0.0)
 
 func indices(parent: int) -> Array[int]:
 	var result: Array[int] = []

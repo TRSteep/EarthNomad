@@ -15,6 +15,7 @@ Copy-Item "build/EarthNomad-$version-Windows.exe" "$stage/EarthNomad.exe" -Force
 Copy-Item README.md,CHANGELOG.md,ATTRIBUTION.md,VERSION $stage -Force
 Copy-Item docs/PHYSICS.md "$stage/docs/PHYSICS.md" -Force
 Copy-Item docs/SATELLITES.md "$stage/docs/SATELLITES.md" -Force
+Copy-Item docs/SCALE_AUDIT.md "$stage/docs/SCALE_AUDIT.md" -Force
 Copy-Item docs/images/*.png "$stage/docs/images/" -Force
 Copy-Item docs/licenses/GODOT-LICENSE.txt,docs/licenses/GODOT-COPYRIGHT.txt $stage -Force
 $zip = Join-Path $root "build/EarthNomad-$version-Windows.zip"

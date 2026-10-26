@@ -13,6 +13,8 @@ if ($Test) {
     & $engine --headless --path . --script tests/test_satellites.gd
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     & $engine --headless --path . --script tests/test_app.gd
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    & $engine --headless --path . --script tests/test_geometry.gd
 } elseif ($RenderTest) {
     & $engine --path . --script tests/test_render.gd
 } elseif ($Build) {
