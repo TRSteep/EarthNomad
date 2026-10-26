@@ -13,10 +13,11 @@ const COLORS = [Color("ffd69a"),Color("b4afa9"),Color("dec69b"),Color("71c9ec"),
 const SCALE = 20.0
 const VISUAL_SCALE_MIN = 0.1
 const VISUAL_SCALE_MAX = 50.0
-const DEFAULT_PLANET_SCALE = 4.0
+const DEFAULT_PLANET_SCALE = 3.0
 const DEFAULT_SUN_SCALE = 2.0
 const DEFAULT_MOON_SCALE = 4.0
-const DISPLAY_SETTINGS_VERSION = 3
+const DISPLAY_SETTINGS_VERSION = 4
+const MOON_ORBIT_DASHES = 96
 const SETTINGS_PATH = "user://display.cfg"
 const SPEEDS = [0.000011574074,0.0416667,1.0,10.0,40.0,120.0]
 const SPEED_LABELS = ["Реальное время", "1 час / сек", "1 день / сек", "10 дней / сек", "40 дней / сек", "120 дней / сек"]
@@ -278,10 +279,12 @@ func _build_moons():
 		add_child(label)
 		moon_labels.append(label)
 		var mesh = ImmediateMesh.new()
-		mesh.surface_begin(Mesh.PRIMITIVE_LINE_STRIP)
-		for k in range(193):
-			mesh.surface_set_color(Color(0.4,0.6,0.75,0.19))
-			mesh.surface_add_vertex(satellites.position_km(i,sim.epoch_jd,TAU*k/192.0)/RADII[int(d.parent)])
+		mesh.surface_begin(Mesh.PRIMITIVE_LINES)
+		for k in range(MOON_ORBIT_DASHES):
+			for fraction in [0.0,0.58]:
+				mesh.surface_set_color(Color(0.4,0.6,0.75,0.32))
+				var angle = TAU*(float(k)+fraction)/float(MOON_ORBIT_DASHES)
+				mesh.surface_add_vertex(satellites.position_km(i,sim.epoch_jd,angle)/RADII[int(d.parent)])
 		mesh.surface_end()
 		var orbit = MeshInstance3D.new()
 		orbit.mesh = mesh
@@ -356,7 +359,7 @@ func _update_moons():
 		var units = _radius(parent)/RADII[parent]
 		var relative = satellites.position_km(i,jd)*units
 		moon_nodes[i].visible = true
-		moon_orbits[i].visible = satellite_system_view and parent==selected
+		moon_orbits[i].visible = overview or galaxy or (satellite_system_view and parent==selected)
 		moon_orbits[i].position = bodies[parent].position
 		moon_orbits[i].scale = Vector3.ONE*_radius(parent)
 		moon_nodes[i].position = bodies[parent].position+relative
@@ -414,29 +417,24 @@ func _validated_scale(value: Variant, fallback: float) -> float:
 	return clampf(number,VISUAL_SCALE_MIN,VISUAL_SCALE_MAX) if is_finite(number) else fallback
 
 func _load_display_settings():
+	# Every launch starts with the requested sizes, even with an older config.
+	_restore_default_sizes()
 	var settings = ConfigFile.new()
 	if settings.load(settings_path) == OK:
-		galaxy_planet_scale = _validated_scale(settings.get_value("galaxy","planet_scale",DEFAULT_PLANET_SCALE),DEFAULT_PLANET_SCALE)
-		galaxy_sun_scale = _validated_scale(settings.get_value("galaxy","sun_scale",DEFAULT_SUN_SCALE),DEFAULT_SUN_SCALE)
-		galaxy_moon_scale = _validated_scale(settings.get_value("galaxy","moon_scale",DEFAULT_MOON_SCALE),DEFAULT_MOON_SCALE)
-		# Upgrade the old 20x/1x defaults while preserving individually chosen sizes.
-		if int(settings.get_value("display","schema",1)) < 2 and galaxy_planet_scale == 20.0 and galaxy_sun_scale == 1.0:
-			galaxy_planet_scale = DEFAULT_PLANET_SCALE
-			galaxy_sun_scale = DEFAULT_SUN_SCALE
-		helio_planet_scale = _validated_scale(settings.get_value("heliocentric","planet_scale",DEFAULT_PLANET_SCALE),DEFAULT_PLANET_SCALE)
-		helio_sun_scale = _validated_scale(settings.get_value("heliocentric","sun_scale",DEFAULT_SUN_SCALE),DEFAULT_SUN_SCALE)
-		helio_moon_scale = _validated_scale(settings.get_value("heliocentric","moon_scale",DEFAULT_MOON_SCALE),DEFAULT_MOON_SCALE)
 		var saved_labels = settings.get_value("display","labels_enabled",true)
 		labels_enabled = saved_labels if saved_labels is bool else true
 
+func _restore_default_sizes():
+	galaxy_planet_scale = DEFAULT_PLANET_SCALE
+	galaxy_sun_scale = DEFAULT_SUN_SCALE
+	galaxy_moon_scale = DEFAULT_MOON_SCALE
+	helio_planet_scale = DEFAULT_PLANET_SCALE
+	helio_sun_scale = DEFAULT_SUN_SCALE
+	helio_moon_scale = DEFAULT_MOON_SCALE
+	actual_size = false
+
 func _save_display_settings():
 	var settings = ConfigFile.new()
-	settings.set_value("galaxy","planet_scale",galaxy_planet_scale)
-	settings.set_value("galaxy","sun_scale",galaxy_sun_scale)
-	settings.set_value("galaxy","moon_scale",galaxy_moon_scale)
-	settings.set_value("heliocentric","planet_scale",helio_planet_scale)
-	settings.set_value("heliocentric","sun_scale",helio_sun_scale)
-	settings.set_value("heliocentric","moon_scale",helio_moon_scale)
 	settings.set_value("display","labels_enabled",labels_enabled)
 	settings.set_value("display","schema",DISPLAY_SETTINGS_VERSION)
 	var error = settings.save(settings_path)
@@ -723,6 +721,14 @@ func _toggle_scale():
 			_select(selected)
 
 func _reset():
+	var old_radius = _focus_radius()
+	_restore_default_sizes()
+	_sync_scale_controls()
+	if not overview and not galaxy:
+		var ratio = _focus_radius()/old_radius
+		distance *= ratio
+		target_distance *= ratio
+	_ensure_follow_clearance()
 	sim.reset()
 	history.clear()
 	last_sample = 0.0

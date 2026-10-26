@@ -10,16 +10,26 @@ func check(condition: bool, message: String):
 		push_error(message)
 		failures += 1
 
+func check_default_sizes(message: String):
+	check(app.galaxy_planet_scale==3.0 and app.galaxy_sun_scale==2.0 and app.galaxy_moon_scale==4.0 and app.helio_planet_scale==3.0 and app.helio_sun_scale==2.0 and app.helio_moon_scale==4.0,message)
+
 func run():
 	app = load("res://main.tscn").instantiate()
 	app.settings_path = "user://test-display.cfg"
 	DirAccess.remove_absolute(app.settings_path)
+	var previous_session = ConfigFile.new()
+	previous_session.set_value("galaxy","planet_scale",40.0)
+	previous_session.set_value("galaxy","sun_scale",25.0)
+	previous_session.set_value("galaxy","moon_scale",19.0)
+	previous_session.set_value("heliocentric","planet_scale",12.0)
+	previous_session.set_value("heliocentric","sun_scale",8.0)
+	previous_session.save(app.settings_path)
 	root.add_child(app)
 	for path in app.texture_cache:
 		check(app.texture_cache[path] != null,"Loaded texture: " + path)
 	app.playing = false
-	check(app.galaxy_planet_scale==4.0 and app.galaxy_sun_scale==2.0,"Galactic defaults are 4x/2x")
-	check(app.helio_planet_scale==4.0 and app.helio_sun_scale==2.0,"Heliocentric defaults are 4x/2x")
+	check_default_sizes("Startup restores 3x/2x/4x in both views despite a previous-session config")
+	check(app.planet_scale_input.value==3.0 and app.sun_scale_input.value==2.0 and app.moon_scale_input.value==4.0,"Startup controls show 3x/2x/4x")
 	for i in range(9):
 		app._select(i)
 		app._update_bodies()
@@ -53,7 +63,7 @@ func run():
 	app._save_display_settings()
 	app.galaxy_planet_scale = 1.0
 	app._load_display_settings()
-	check(is_equal_approx(app.galaxy_planet_scale,25.0),"Settings survive reload")
+	check_default_sizes("Reload restores defaults instead of previous sizes")
 	app._set_visual_scale(-10.0,false)
 	check(app.galaxy_planet_scale==app.VISUAL_SCALE_MIN,"Lower scale bound")
 	app._set_visual_scale(10000.0,false)
@@ -67,11 +77,11 @@ func run():
 	app._toggle_scale()
 	check(is_equal_approx(app._radius(3),6371.0/149597870.7*20.0),"Physical scale ignores visual settings")
 	app._reset_visual_scale()
-	check(app.galaxy_planet_scale==4.0 and app.galaxy_sun_scale==2.0,"Scale reset restores 4x/2x")
+	check(app.galaxy_planet_scale==3.0 and app.galaxy_sun_scale==2.0 and app.galaxy_moon_scale==4.0,"Scale reset restores 3x/2x/4x")
 	app._reset()
 	check(app.sim.elapsed==0.0,"Reset time")
 	check(app.sim.pending==0.0,"Reset residual time")
-	check(app.galaxy_planet_scale==4.0 and app.galaxy_sun_scale==2.0,"Time reset does not restore old defaults")
+	check_default_sizes("Time reset restores the requested defaults in both views")
 	app._system_overview()
 	app._update_readout()
 	check(not app.galaxy and app.size_panel.visible,"Heliocentric size controls are visible")
@@ -81,7 +91,7 @@ func run():
 	check(is_equal_approx(app._radius(0),app.DISPLAY_RADII[0]*3.0),"Heliocentric Sun scale")
 	check(app.sim.p==positions and app.sim.v==velocities,"Both view sizes leave physical state unchanged")
 	app._toggle_galaxy()
-	check(app.planet_scale_input.value==4.0 and app.sun_scale_input.value==2.0,"Galactic controls restored when switching views")
+	check(app.planet_scale_input.value==3.0 and app.sun_scale_input.value==2.0,"Galactic controls restored when switching views")
 	app._inner_overview()
 	check(app.planet_scale_input.value==8.0 and app.sun_scale_input.value==3.0,"Inner group uses heliocentric sizes")
 	app._update_bodies()
@@ -96,22 +106,22 @@ func run():
 	app.labels_enabled = true
 	app.helio_planet_scale = 1.0
 	app._load_display_settings()
-	check(not app.labels_enabled and app.helio_planet_scale==8.0,"Labels and heliocentric sizes survive reload")
+	check(not app.labels_enabled and app.helio_planet_scale==3.0,"Label preference persists while startup sizes reset")
 	app.labels_toggle.button_pressed = true
 	app._reset_visual_scale()
-	check(app.helio_planet_scale==4.0 and app.helio_sun_scale==2.0,"Heliocentric scale reset restores 4x/2x")
-	# Existing 0.2.0 settings migrate once, and out-of-range custom values are clamped.
+	check(app.helio_planet_scale==3.0 and app.helio_sun_scale==2.0,"Heliocentric scale reset restores 3x/2x")
+	# Legacy sizes must not override new-session defaults.
 	var legacy = ConfigFile.new()
 	legacy.set_value("galaxy","planet_scale",20.0)
 	legacy.set_value("galaxy","sun_scale",1.0)
 	legacy.save(app.settings_path)
 	app._load_display_settings()
-	check(app.galaxy_planet_scale==4.0 and app.galaxy_sun_scale==2.0,"Legacy default pair migrates to 4x/2x")
+	check_default_sizes("Legacy defaults are replaced by 3x/2x/4x")
 	legacy.set_value("galaxy","planet_scale",1000.0)
 	legacy.set_value("galaxy","sun_scale",8.0)
 	legacy.save(app.settings_path)
 	app._load_display_settings()
-	check(app.galaxy_planet_scale==50.0 and app.galaxy_sun_scale==8.0,"Legacy custom sizes keep values within 50x")
+	check_default_sizes("Legacy custom sizes cannot override startup defaults")
 	app._sync_scale_controls()
 	app._select(3)
 	var before: float = app.target_distance
@@ -216,7 +226,7 @@ func run():
 	app.helio_moon_scale = 1.0
 	app.galaxy_moon_scale = 1.0
 	app._load_display_settings()
-	check(app.helio_moon_scale==7.5 and app.galaxy_moon_scale==12.5,"Both satellite scale preferences survive reload")
+	check_default_sizes("Reload resets satellite sizes in both views")
 	app._set_moon_scale(500.0)
 	check(app.helio_moon_scale==50.0,"Satellite size respects the 50x limit")
 	app._toggle_scale()
@@ -228,7 +238,7 @@ func run():
 	legacy.set_value("galaxy","sun_scale",1.0)
 	legacy.save(app.settings_path)
 	app._load_display_settings()
-	check(app.galaxy_planet_scale==20.0 and app.galaxy_sun_scale==1.0,"Schema 2 custom sizes are not remigrated")
+	check_default_sizes("Schema 2 sizes are ignored at startup")
 	app._toggle_galaxy()
 	app.distance = 1.0
 	app.target_distance = 1.0

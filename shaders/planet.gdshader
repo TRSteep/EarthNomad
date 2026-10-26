@@ -14,6 +14,8 @@ uniform vec3 body_tint : source_color = vec3(1.0);
 uniform vec3 parent_center = vec3(0.0);
 uniform float parent_radius = 0.0;
 uniform bool haze = false;
+// Artistic, neutral fill for readable night-side terrain, not calibrated planetshine.
+uniform float night_fill : hint_range(0.0,0.2) = 0.12;
 varying vec3 world_normal;
 varying vec3 world_position;
 void vertex() {
@@ -25,7 +27,9 @@ void fragment() {
 	if(haze) { tex=mix(tex,vec3(0.64,0.43,0.19),0.93); }
 	float cosine = dot(normalize(world_normal), normalize(sun_direction));
 	float daylight = max(cosine, 0.0);
-	vec3 color = tex * (0.012 + daylight * 1.15);
+	float night_weight = 1.0-smoothstep(-0.12,0.18,cosine);
+	vec3 ambient = tex*(0.012+night_fill*night_weight);
+	vec3 color = tex*daylight*1.15;
 	if(ring_kind>0) {
 		vec3 rp=(world_to_ring*vec4(world_position,1.0)).xyz;
 		vec3 ray=normalize((world_to_ring*vec4(sun_direction,0.0)).xyz);
@@ -45,6 +49,7 @@ void fragment() {
 		float shadow=smoothstep(parent_radius*0.97,parent_radius*1.03,miss);
 		if(along>0.0) { color*=0.025+0.975*shadow; }
 	}
+	color += ambient;
 	if (earth) {
 		float cloud_shadow = texture(cloud_map, UV + vec2(0.0015, 0.0)).r;
 		color *= 1.0 - cloud_shadow * daylight * 0.23;
