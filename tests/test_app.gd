@@ -335,7 +335,8 @@ func run():
 	app.physical_mode_button.pressed.emit()
 	check(app._planet_scale()==1.0 and app._sun_scale()==1.0 and app._moon_scale()==1.0,"1:1 sets all actual multipliers to one")
 	check(app.planet_scale_input.value==1.0 and app.sun_scale_input.value==1.0 and app.moon_scale_input.value==1.0,"1:1 updates all numeric controls")
-	check(app.distance_compression==500.0,"1:1 preserves the distance slider")
+	check(app.distance_compression==1.0 and app.compression_slider.value==1.0,"1:1 restores real distances and synchronizes the slider")
+	check(is_equal_approx(app.target_distance,2000.0),"1:1 restores uncompressed galactic framing")
 	check(app.physical_mode_button.get_parent().get_child_count()==2,"Only 1:1 and Visual buttons remain")
 	check(app.visual_mode_button.text=="Visual","Visual caption")
 	var preset_path = "user://test-visual.cfg"

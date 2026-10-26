@@ -555,11 +555,10 @@ func _sync_scale_controls():
 	_layout_scale_panel.call_deferred()
 
 func _set_scale_mode(physical: bool):
-	var preset = {"planets":1.0,"sun":1.0,"moons":1.0} if physical else _read_visual_preset()
-	if not physical:
-		var previous_scale = _interplanet_scale()
-		distance_compression = preset.compression
-		_rescale_flight_overview(previous_scale)
+	var preset = {"planets":1.0,"sun":1.0,"moons":1.0,"compression":1.0} if physical else _read_visual_preset()
+	var previous_scale = _interplanet_scale()
+	distance_compression = preset.compression
+	_rescale_flight_overview(previous_scale)
 	if galaxy:
 		galaxy_planet_scale = preset.planets
 		galaxy_sun_scale = preset.sun
