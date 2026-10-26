@@ -11,9 +11,10 @@ const ROTATIONS = [609.12,1407.6,-5832.5,23.9345,24.6229,9.925,10.656,-17.24,16.
 const COLORS = [Color("ffd69a"),Color("b4afa9"),Color("dec69b"),Color("71c9ec"),Color("dc9473"),Color("d7b190"),Color("e6d1a2"),Color("9cdfdf"),Color("658eee")]
 const SCALE = 20.0
 const VISUAL_SCALE_MIN = 0.1
-const VISUAL_SCALE_MAX = 1000.0
-const DEFAULT_PLANET_SCALE = 20.0
-const DEFAULT_SUN_SCALE = 1.0
+const VISUAL_SCALE_MAX = 50.0
+const DEFAULT_PLANET_SCALE = 4.0
+const DEFAULT_SUN_SCALE = 2.0
+const DISPLAY_SETTINGS_VERSION = 2
 const SETTINGS_PATH = "user://display.cfg"
 const SPEEDS = [0.000011574074,0.0416667,1.0,10.0,40.0,120.0]
 const SPEED_LABELS = ["Реальное время", "1 час / сек", "1 день / сек", "10 дней / сек", "40 дней / сек", "120 дней / сек"]
@@ -35,6 +36,9 @@ var galaxy = false
 var actual_size = false
 var galaxy_planet_scale = DEFAULT_PLANET_SCALE
 var galaxy_sun_scale = DEFAULT_SUN_SCALE
+var helio_planet_scale = DEFAULT_PLANET_SCALE
+var helio_sun_scale = DEFAULT_SUN_SCALE
+var labels_enabled = true
 var playing = true
 var speed_index = 1
 var yaw = 0.0
@@ -54,7 +58,7 @@ var initial_energy = 0.0
 var capture_frames = 0
 var startup_args = OS.get_cmdline_user_args()
 var texture_cache: Dictionary = {}
-var galaxy_size_panel: PanelContainer
+var size_panel: PanelContainer
 var planet_scale_slider: HSlider
 var sun_scale_slider: HSlider
 var planet_scale_input: SpinBox
@@ -62,6 +66,9 @@ var sun_scale_input: SpinBox
 var scale_note: Label
 var settings_timer: Timer
 var settings_path = SETTINGS_PATH
+var labels_toggle: CheckButton
+var scale_heading: Label
+var navigation_box: VBoxContainer
 
 func _ready():
 	_load_display_settings()
@@ -238,8 +245,14 @@ func _radius(i: int) -> float:
 	if actual_size:
 		return RADII[i] / Physics.AU_KM * SCALE
 	# Visual exaggeration never enters Physics or the sampled trajectories.
-	var multiplier = (galaxy_sun_scale if i == 0 else galaxy_planet_scale) if galaxy else 1.0
+	var multiplier = _sun_scale() if i == 0 else _planet_scale()
 	return DISPLAY_RADII[i] * multiplier
+
+func _planet_scale() -> float:
+	return galaxy_planet_scale if galaxy else helio_planet_scale
+
+func _sun_scale() -> float:
+	return galaxy_sun_scale if galaxy else helio_sun_scale
 
 func _validated_scale(value: Variant, fallback: float) -> float:
 	if not (value is float or value is int):
@@ -252,11 +265,23 @@ func _load_display_settings():
 	if settings.load(settings_path) == OK:
 		galaxy_planet_scale = _validated_scale(settings.get_value("galaxy","planet_scale",DEFAULT_PLANET_SCALE),DEFAULT_PLANET_SCALE)
 		galaxy_sun_scale = _validated_scale(settings.get_value("galaxy","sun_scale",DEFAULT_SUN_SCALE),DEFAULT_SUN_SCALE)
+		# Upgrade the old 20x/1x defaults while preserving individually chosen sizes.
+		if int(settings.get_value("display","schema",1)) < DISPLAY_SETTINGS_VERSION and galaxy_planet_scale == 20.0 and galaxy_sun_scale == 1.0:
+			galaxy_planet_scale = DEFAULT_PLANET_SCALE
+			galaxy_sun_scale = DEFAULT_SUN_SCALE
+		helio_planet_scale = _validated_scale(settings.get_value("heliocentric","planet_scale",DEFAULT_PLANET_SCALE),DEFAULT_PLANET_SCALE)
+		helio_sun_scale = _validated_scale(settings.get_value("heliocentric","sun_scale",DEFAULT_SUN_SCALE),DEFAULT_SUN_SCALE)
+		var saved_labels = settings.get_value("display","labels_enabled",true)
+		labels_enabled = saved_labels if saved_labels is bool else true
 
 func _save_display_settings():
 	var settings = ConfigFile.new()
 	settings.set_value("galaxy","planet_scale",galaxy_planet_scale)
 	settings.set_value("galaxy","sun_scale",galaxy_sun_scale)
+	settings.set_value("heliocentric","planet_scale",helio_planet_scale)
+	settings.set_value("heliocentric","sun_scale",helio_sun_scale)
+	settings.set_value("display","labels_enabled",labels_enabled)
+	settings.set_value("display","schema",DISPLAY_SETTINGS_VERSION)
 	var error = settings.save(settings_path)
 	if error != OK:
 		push_warning("Unable to save display settings: %s" % error)
@@ -265,29 +290,45 @@ func _exit_tree():
 	if is_instance_valid(settings_timer) and not settings_timer.is_stopped():
 		_save_display_settings()
 
-func _set_galaxy_scale(value: float, sun: bool):
+func _set_visual_scale(value: float, sun: bool):
 	var old_radius = _radius(selected)
 	var safe = _validated_scale(value,DEFAULT_SUN_SCALE if sun else DEFAULT_PLANET_SCALE)
-	if sun:
-		galaxy_sun_scale = safe
+	if galaxy:
+		if sun:
+			galaxy_sun_scale = safe
+		else:
+			galaxy_planet_scale = safe
 	else:
-		galaxy_planet_scale = safe
+		if sun:
+			helio_sun_scale = safe
+		else:
+			helio_planet_scale = safe
 	# Editing the artistic scale explicitly leaves true-size mode.
 	actual_size = false
-	planet_scale_slider.set_value_no_signal(log(galaxy_planet_scale)/log(2.0))
-	sun_scale_slider.set_value_no_signal(log(galaxy_sun_scale)/log(2.0))
-	planet_scale_input.set_value_no_signal(galaxy_planet_scale)
-	sun_scale_input.set_value_no_signal(galaxy_sun_scale)
-	if galaxy and not overview:
+	_sync_scale_controls()
+	if not overview:
 		# Keep a close-up camera outside an enlarged body without changing its angle.
 		var ratio = _radius(selected)/old_radius
 		distance *= ratio
 		target_distance *= ratio
 	settings_timer.start()
 
-func _reset_galaxy_scale():
-	_set_galaxy_scale(DEFAULT_PLANET_SCALE,false)
-	_set_galaxy_scale(DEFAULT_SUN_SCALE,true)
+func _reset_visual_scale():
+	_set_visual_scale(DEFAULT_PLANET_SCALE,false)
+	_set_visual_scale(DEFAULT_SUN_SCALE,true)
+
+func _sync_scale_controls():
+	planet_scale_slider.set_value_no_signal(log(_planet_scale())/log(2.0))
+	sun_scale_slider.set_value_no_signal(log(_sun_scale())/log(2.0))
+	planet_scale_input.set_value_no_signal(_planet_scale())
+	sun_scale_input.set_value_no_signal(_sun_scale())
+	scale_heading.text = "РАЗМЕР ОБЪЕКТОВ · " + ("ГАЛАКТИКА" if galaxy else "ГЕЛИОЦЕНТРИЧЕСКИЙ ВИД")
+
+func _set_labels_enabled(enabled: bool):
+	labels_enabled = enabled
+	labels_toggle.set_pressed_no_signal(enabled)
+	_update_labels()
+	settings_timer.start()
 
 func _update_bodies():
 	var origin = 0 if overview else selected
@@ -305,7 +346,7 @@ func _update_bodies():
 		if i == 3:
 			atmospheres[30].set_shader_parameter("sun_direction", light)
 		labels[i].position = bodies[i].position + Vector3.UP*(_radius(i)+0.5)
-		labels[i].visible = overview
+		labels[i].visible = overview and labels_enabled
 		labels[i].scale = Vector3.ONE * maxf(1.0,distance/120.0)
 	orbit_root.visible = overview and not galaxy
 	trail_instance.visible = galaxy
@@ -391,7 +432,7 @@ func _update_camera(delta: float):
 func _update_labels():
 	var used: Array[Rect2] = []
 	for label in labels:
-		label.visible = overview and not camera.is_position_behind(label.position)
+		label.visible = overview and labels_enabled and not camera.is_position_behind(label.position)
 		if not label.visible:
 			continue
 		var point = camera.unproject_position(label.position)
@@ -406,6 +447,7 @@ func _update_labels():
 func _select(index: int):
 	selected = index
 	overview = false
+	_sync_scale_controls()
 	target_distance = _radius(index)*(7.0 if index == 6 else 4.4)
 	distance = target_distance
 	var p = sim.position(index)-sim.position(0)
@@ -416,6 +458,7 @@ func _select(index: int):
 
 func _set_overview():
 	overview = true
+	_sync_scale_controls()
 	target_distance = 2000.0 if galaxy else 1750.0
 	pitch = 0.42 if galaxy else 0.85
 	yaw = 1.05 if galaxy else 0.3
@@ -426,6 +469,10 @@ func _toggle_galaxy():
 	galaxy = not galaxy
 	if galaxy:
 		_seed_history()
+	_set_overview()
+
+func _system_overview():
+	galaxy = false
 	_set_overview()
 
 func _inner_overview():
@@ -486,6 +533,7 @@ func _unhandled_input(event: InputEvent):
 			KEY_SPACE: _toggle_pause()
 			KEY_R: _set_overview()
 			KEY_G: _toggle_galaxy()
+			KEY_L: _set_labels_enabled(not labels_enabled)
 			KEY_T: _toggle_scale()
 			KEY_H: ui.visible = not ui.visible
 			KEY_F: _select(selected)
@@ -578,9 +626,8 @@ func _build_ui():
 		button.add_theme_color_override("font_color",COLORS[i])
 		left.add_child(button)
 		select_buttons.append(button)
-	left.add_child(_button("◎  Обзор системы",_set_overview))
-	left.add_child(_button("⊙  Земная группа",_inner_overview))
 	var right = _box(root,Vector2(1130,112),282)
+	navigation_box = right
 	(right.get_parent() as Control).anchor_left = 1.0
 	(right.get_parent() as Control).anchor_right = 1.0
 	(right.get_parent() as Control).offset_left = -310
@@ -592,9 +639,15 @@ func _build_ui():
 	right.add_child(detail_label)
 	right.add_child(HSeparator.new())
 	right.add_child(_button("↗  Галактический полёт",_toggle_galaxy))
-	right.add_child(_button("⇄  Масштаб размеров",_toggle_scale))
-	right.add_child(_button("＋  Приблизить",_zoom.bind(0.75)))
-	right.add_child(_button("−  Отдалить",_zoom.bind(1.3333)))
+	right.add_child(_button("◎  Обзор системы",_system_overview))
+	right.add_child(_button("⊙  Земная группа",_inner_overview))
+	labels_toggle = CheckButton.new()
+	labels_toggle.text = "Подписи объектов"
+	labels_toggle.custom_minimum_size.y = 44
+	labels_toggle.focus_mode = Control.FOCUS_NONE
+	labels_toggle.button_pressed = labels_enabled
+	labels_toggle.toggled.connect(_set_labels_enabled)
+	right.add_child(labels_toggle)
 	var note = _label("Орбиты: ньютоновская гравитация\nГалактика: приближённая модель\nОриентация осей: иллюстративная\nТекстуры: Solar System Scope\nCC BY 4.0 · JPL / NASA",12,Color("73929f"))
 	right.add_child(note)
 	var bottom = PanelContainer.new()
@@ -635,7 +688,7 @@ func _scale_row(parent: VBoxContainer, caption: String, value: float, sun: bool)
 	var label = _label(caption,15)
 	label.custom_minimum_size.x = 85
 	row.add_child(label)
-	# Logarithmic travel gives fine control at both 0.1x and 1000x.
+	# Logarithmic travel gives fine control across the permitted range.
 	var slider = HSlider.new()
 	slider.min_value = log(VISUAL_SCALE_MIN)/log(2.0)
 	slider.max_value = log(VISUAL_SCALE_MAX)/log(2.0)
@@ -644,8 +697,8 @@ func _scale_row(parent: VBoxContainer, caption: String, value: float, sun: bool)
 	slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	slider.custom_minimum_size = Vector2(100,44)
 	slider.focus_mode = Control.FOCUS_NONE
-	slider.tooltip_text = "Визуальное увеличение от 0.1× до 1000×; орбиты и гравитация не меняются."
-	slider.value_changed.connect(func(exponent): _set_galaxy_scale(snappedf(pow(2.0,exponent),0.1),sun))
+	slider.tooltip_text = "Визуальное увеличение от 0.1× до 50×; орбиты и гравитация не меняются."
+	slider.value_changed.connect(func(exponent): _set_visual_scale(snappedf(pow(2.0,exponent),0.1),sun))
 	row.add_child(slider)
 	var input = SpinBox.new()
 	input.min_value = VISUAL_SCALE_MIN
@@ -654,7 +707,7 @@ func _scale_row(parent: VBoxContainer, caption: String, value: float, sun: bool)
 	input.value = value
 	input.suffix = "×"
 	input.custom_minimum_size = Vector2(128,44)
-	input.value_changed.connect(_set_galaxy_scale.bind(sun))
+	input.value_changed.connect(_set_visual_scale.bind(sun))
 	row.add_child(input)
 	if sun:
 		sun_scale_slider = slider
@@ -665,18 +718,17 @@ func _scale_row(parent: VBoxContainer, caption: String, value: float, sun: bool)
 
 func _build_scale_controls(root: Control):
 	var box = _box(root,Vector2(270,574),520)
-	galaxy_size_panel = box.get_parent()
-	galaxy_size_panel.visible = false
+	size_panel = box.get_parent()
 	var heading = HBoxContainer.new()
 	box.add_child(heading)
-	var caption = _label("РАЗМЕР ОБЪЕКТОВ · ГАЛАКТИКА",13,Color("7fd0cd"))
-	caption.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	heading.add_child(caption)
-	var reset = _button("Сброс",_reset_galaxy_scale)
+	scale_heading = _label("",12,Color("7fd0cd"))
+	scale_heading.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	heading.add_child(scale_heading)
+	var reset = _button("Сброс",_reset_visual_scale)
 	reset.custom_minimum_size.y = 32
 	heading.add_child(reset)
-	_scale_row(box,"Планеты",galaxy_planet_scale,false)
-	_scale_row(box,"Солнце",galaxy_sun_scale,true)
+	_scale_row(box,"Планеты",_planet_scale(),false)
+	_scale_row(box,"Солнце",_sun_scale(),true)
 	scale_note = _label("",12,Color("73929f"))
 	box.add_child(scale_note)
 
@@ -684,8 +736,7 @@ func _update_readout():
 	var date = Time.get_datetime_dict_from_unix_time((sim.epoch_jd-2440587.5+sim.elapsed+sim.pending)*86400.0)
 	clock_label.text = "%02d.%02d.%04d  ·  %02d:%02d" % [date.day,date.month,date.year,date.hour,date.minute]
 	frame_label.text = ("ГАЛАКТИЧЕСКИЙ ПОЛЁТ" if galaxy else "ГЕЛИОЦЕНТРИЧЕСКИЙ ВИД") + "   /   " + ("РАЗМЕРЫ 1:1" if actual_size else "РАЗМЕРЫ УВЕЛИЧЕНЫ")
-	galaxy_size_panel.visible = galaxy
-	scale_note.text = "Режим 1:1. Измените размер, чтобы включить увеличение." if actual_size else "Только изображение · 0.1–1000× · Возможны перекрытия"
+	scale_note.text = "Режим 1:1. Измените размер, чтобы включить увеличение." if actual_size else "Только изображение · 0.1–50× · Возможны перекрытия"
 	title_label.text = NAMES[selected]
 	var radius_au = sim.position(selected).distance_to(sim.position(0))
 	var speed = 0.0
