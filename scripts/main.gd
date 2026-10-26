@@ -12,13 +12,14 @@ const ROTATIONS = [609.12,1407.6,-5832.5,23.9345,24.6229,9.925,10.656,-17.24,16.
 const COLORS = [Color("ffd69a"),Color("b4afa9"),Color("dec69b"),Color("71c9ec"),Color("dc9473"),Color("d7b190"),Color("e6d1a2"),Color("9cdfdf"),Color("658eee")]
 const SCALE = 20.0
 const KM_TO_SCENE = SCALE/Physics.AU_KM
-const MAX_DISTANCE_COMPRESSION = 50.0
-const VISUAL_SCALE_MIN = 0.1
-const VISUAL_SCALE_MAX = 150.0
-const DEFAULT_PLANET_SCALE = 3.0
-const DEFAULT_SUN_SCALE = 2.0
-const DEFAULT_MOON_SCALE = 4.0
-const DISPLAY_SETTINGS_VERSION = 6
+const MAX_DISTANCE_COMPRESSION = 500.0
+const VISUAL_SCALE_MIN = 1.0
+const VISUAL_SCALE_MAX = 500.0
+const SUN_SCALE_MAX = 50.0
+const DEFAULT_PLANET_SCALE = 10.0
+const DEFAULT_SUN_SCALE = 10.0
+const DEFAULT_MOON_SCALE = 10.0
+const DISPLAY_SETTINGS_VERSION = 7
 const MOON_ORBIT_DASHES = 96
 const MOON_TRAIL_PERIODS = 4.0
 const MOON_TRAIL_STEPS = 256
@@ -93,6 +94,7 @@ var moon_scale_input: SpinBox
 var scale_note: Label
 var settings_timer: Timer
 var settings_path = SETTINGS_PATH
+var visual_preset_path = ""
 var labels_toggle: CheckButton
 var scale_heading: Label
 var navigation_box: VBoxContainer
@@ -100,8 +102,7 @@ var view_buttons: Dictionary = {}
 var moons_toggle: CheckButton
 var moon_path_buttons: Dictionary = {}
 var physical_mode_button: Button
-var adjust_mode_button: Button
-var reset_size_button: Button
+var visual_mode_button: Button
 var adjust_controls: VBoxContainer
 var distance_controls: HBoxContainer
 var compression_slider: HSlider
@@ -322,7 +323,7 @@ func _build_moons():
 
 func _moon_radius(index: int) -> float:
 	var d: Dictionary = satellites.data[index]
-	return d.radius_km*KM_TO_SCENE*(1.0 if actual_size else _moon_scale())
+	return d.radius_km*KM_TO_SCENE*_moon_scale()
 
 func _focus_radius() -> float:
 	return _moon_radius(selected_moon) if selected_moon>=0 else _radius(selected)
@@ -425,10 +426,10 @@ func _build_orbits():
 
 func _radius(i: int) -> float:
 	var multiplier = _sun_scale() if i == 0 else _planet_scale()
-	return RADII[i]*KM_TO_SCENE*(1.0 if actual_size else multiplier)
+	return RADII[i]*KM_TO_SCENE*multiplier
 
 func _interplanet_scale() -> float:
-	return 1.0/distance_compression if actual_size else 1.0
+	return 1.0/distance_compression
 
 func _planet_scale() -> float:
 	return galaxy_planet_scale if galaxy else helio_planet_scale
@@ -439,11 +440,11 @@ func _sun_scale() -> float:
 func _moon_scale() -> float:
 	return galaxy_moon_scale if galaxy else helio_moon_scale
 
-func _validated_scale(value: Variant, fallback: float) -> float:
+func _validated_scale(value: Variant, fallback: float, maximum: float = VISUAL_SCALE_MAX) -> float:
 	if not (value is float or value is int):
 		return fallback
 	var number = float(value)
-	return clampf(number,VISUAL_SCALE_MIN,VISUAL_SCALE_MAX) if is_finite(number) else fallback
+	return clampf(number,VISUAL_SCALE_MIN,maximum) if is_finite(number) else fallback
 
 func _load_display_settings():
 	# Every launch starts with the requested sizes, even with an older config.
@@ -457,14 +458,28 @@ func _load_display_settings():
 		var saved_path = settings.get_value("display","moon_path_mode","orbits")
 		moon_path_mode = saved_path if saved_path in ["orbits","trails"] else "orbits"
 
+func _read_visual_preset() -> Dictionary:
+	var config = ConfigFile.new()
+	var path = visual_preset_path
+	if path.is_empty():
+		path = "res://visual.cfg" if OS.has_feature("editor") else OS.get_executable_path().get_base_dir().path_join("visual.cfg")
+	if config.load(path)!=OK:
+		config.load("res://visual.cfg")
+	return {
+		"planets":_validated_scale(config.get_value("sizes","planets",DEFAULT_PLANET_SCALE),DEFAULT_PLANET_SCALE),
+		"sun":_validated_scale(config.get_value("sizes","sun",DEFAULT_SUN_SCALE),DEFAULT_SUN_SCALE,SUN_SCALE_MAX),
+		"moons":_validated_scale(config.get_value("sizes","moons",DEFAULT_MOON_SCALE),DEFAULT_MOON_SCALE)
+	}
+
 func _restore_default_sizes():
-	galaxy_planet_scale = DEFAULT_PLANET_SCALE
-	galaxy_sun_scale = DEFAULT_SUN_SCALE
-	galaxy_moon_scale = DEFAULT_MOON_SCALE
-	helio_planet_scale = DEFAULT_PLANET_SCALE
-	helio_sun_scale = DEFAULT_SUN_SCALE
-	helio_moon_scale = DEFAULT_MOON_SCALE
-	actual_size = false
+	var preset = _read_visual_preset()
+	galaxy_planet_scale = preset.planets
+	galaxy_sun_scale = preset.sun
+	galaxy_moon_scale = preset.moons
+	helio_planet_scale = preset.planets
+	helio_sun_scale = preset.sun
+	helio_moon_scale = preset.moons
+	actual_size = preset.planets==1.0 and preset.sun==1.0 and preset.moons==1.0
 	distance_compression = 1.0
 
 func _save_display_settings():
@@ -482,7 +497,7 @@ func _exit_tree():
 		_save_display_settings()
 
 func _set_visual_scale(value: float, sun: bool):
-	var safe = _validated_scale(value,DEFAULT_SUN_SCALE if sun else DEFAULT_PLANET_SCALE)
+	var safe = _validated_scale(value,DEFAULT_SUN_SCALE if sun else DEFAULT_PLANET_SCALE,SUN_SCALE_MAX if sun else VISUAL_SCALE_MAX)
 	if galaxy:
 		if sun:
 			galaxy_sun_scale = safe
@@ -493,8 +508,6 @@ func _set_visual_scale(value: float, sun: bool):
 			helio_sun_scale = safe
 		else:
 			helio_planet_scale = safe
-	# Editing the artistic scale explicitly leaves true-size mode.
-	actual_size = false
 	_sync_scale_controls()
 	_ensure_follow_clearance()
 	settings_timer.start()
@@ -505,7 +518,6 @@ func _set_moon_scale(value: float):
 		galaxy_moon_scale = safe
 	else:
 		helio_moon_scale = safe
-	actual_size = false
 	_sync_scale_controls()
 	_ensure_follow_clearance()
 	settings_timer.start()
@@ -522,21 +534,8 @@ func _set_size_control(value: float, kind: String):
 	else:
 		_set_visual_scale(value,kind=="sun")
 
-func _reset_visual_scale():
-	if galaxy:
-		galaxy_planet_scale = DEFAULT_PLANET_SCALE
-		galaxy_sun_scale = DEFAULT_SUN_SCALE
-		galaxy_moon_scale = DEFAULT_MOON_SCALE
-	else:
-		helio_planet_scale = DEFAULT_PLANET_SCALE
-		helio_sun_scale = DEFAULT_SUN_SCALE
-		helio_moon_scale = DEFAULT_MOON_SCALE
-	# Switch through the mode handler so a compressed flight overview keeps
-	# its framing when Reset returns to the uncompressed Size mode.
-	_set_scale_mode(false)
-	settings_timer.start()
-
 func _sync_scale_controls():
+	actual_size = _planet_scale()==1.0 and _sun_scale()==1.0 and _moon_scale()==1.0
 	planet_scale_slider.set_value_no_signal(log(_planet_scale())/log(2.0))
 	sun_scale_slider.set_value_no_signal(log(_sun_scale())/log(2.0))
 	moon_scale_slider.set_value_no_signal(log(_moon_scale())/log(2.0))
@@ -545,27 +544,31 @@ func _sync_scale_controls():
 	moon_scale_input.set_value_no_signal(_moon_scale())
 	scale_heading.text = "РАЗМЕР ОБЪЕКТОВ · " + ("ГАЛАКТИКА" if galaxy else "ГЕЛИОЦЕНТРИЧЕСКИЙ ВИД")
 	physical_mode_button.set_pressed_no_signal(actual_size)
-	adjust_mode_button.set_pressed_no_signal(not actual_size)
-	physical_mode_button.disabled = actual_size
-	adjust_mode_button.disabled = not actual_size
-	adjust_controls.visible = not actual_size
-	distance_controls.visible = actual_size
+	visual_mode_button.set_pressed_no_signal(not actual_size)
+	# Both presets can be reapplied; Visual reloads its file on every press.
+	adjust_controls.visible = true
+	distance_controls.visible = true
 	compression_slider.set_value_no_signal(distance_compression)
 	compression_label.text = "÷ %.1f" % distance_compression
 	_layout_scale_panel.call_deferred()
 
 func _set_scale_mode(physical: bool):
-	var previous_scale = _interplanet_scale()
-	actual_size = physical
-	_rescale_flight_overview(previous_scale)
+	var preset = {"planets":1.0,"sun":1.0,"moons":1.0} if physical else _read_visual_preset()
+	if galaxy:
+		galaxy_planet_scale = preset.planets
+		galaxy_sun_scale = preset.sun
+		galaxy_moon_scale = preset.moons
+	else:
+		helio_planet_scale = preset.planets
+		helio_sun_scale = preset.sun
+		helio_moon_scale = preset.moons
 	_sync_scale_controls()
 	_update_bodies()
 	_ensure_follow_clearance()
 	_refresh_paths()
+	settings_timer.start()
 
 func _set_distance_compression(value: float):
-	if not actual_size:
-		return
 	var previous_scale = _interplanet_scale()
 	distance_compression = clampf(value,1.0,MAX_DISTANCE_COMPRESSION) if is_finite(value) else 1.0
 	_rescale_flight_overview(previous_scale)
@@ -798,6 +801,14 @@ func _process(delta: float):
 
 func _update_camera(delta: float):
 	distance = lerpf(distance,target_distance,1.0-exp(-delta*8.0))
+	if overview:
+		# Independent large radii and distance compression can put an overview
+		# inside the Sun or a giant planet; keep it outside the enlarged bodies.
+		var clearance = 0.0
+		for i in range(bodies.size()):
+			clearance = maxf(clearance,_radius(i)*2.0)
+		distance = maxf(distance,clearance)
+		target_distance = maxf(target_distance,clearance)
 	var target = Vector3.ZERO if overview else bodies[selected].position
 	if selected_moon>=0 and not overview:
 		target = moon_nodes[selected_moon].position
@@ -1172,18 +1183,19 @@ func _scale_row(parent: VBoxContainer, caption: String, value: float, kind: Stri
 	# Logarithmic travel gives fine control across the permitted range.
 	var slider = HSlider.new()
 	slider.min_value = log(VISUAL_SCALE_MIN)/log(2.0)
-	slider.max_value = log(VISUAL_SCALE_MAX)/log(2.0)
+	var maximum = SUN_SCALE_MAX if kind=="sun" else VISUAL_SCALE_MAX
+	slider.max_value = log(maximum)/log(2.0)
 	slider.step = 0.001
 	slider.value = log(value)/log(2.0)
 	slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	slider.custom_minimum_size = Vector2(100,44)
 	slider.focus_mode = Control.FOCUS_NONE
-	slider.tooltip_text = "Множитель реального радиуса от 0.1× до 150×. Например, радиус Земли при ×4 — 25 484 км. Орбиты не меняются."
+	slider.tooltip_text = "Множитель реального радиуса от ×1 до ×%d. Орбиты спутников не меняются." % int(maximum)
 	slider.value_changed.connect(func(exponent): _set_size_control(snappedf(pow(2.0,exponent),0.1),kind))
 	row.add_child(slider)
 	var input = SpinBox.new()
 	input.min_value = VISUAL_SCALE_MIN
-	input.max_value = VISUAL_SCALE_MAX
+	input.max_value = maximum
 	input.step = 0.1
 	input.value = value
 	input.suffix = "×"
@@ -1212,24 +1224,20 @@ func _build_scale_controls(root: Control):
 	physical_mode_button.toggle_mode = true
 	physical_mode_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	modes.add_child(physical_mode_button)
-	adjust_mode_button = _button("Size",_set_scale_mode.bind(false))
-	adjust_mode_button.toggle_mode = true
-	adjust_mode_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	modes.add_child(adjust_mode_button)
-	reset_size_button = _button("Reset",_reset_visual_scale)
-	reset_size_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	reset_size_button.tooltip_text = "Размеры текущего вида: планеты ×3, Солнце ×2, спутники ×4; режим Size."
-	modes.add_child(reset_size_button)
+	visual_mode_button = _button("Visual",_set_scale_mode.bind(false))
+	visual_mode_button.toggle_mode = true
+	visual_mode_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	modes.add_child(visual_mode_button)
 	adjust_controls = VBoxContainer.new()
 	adjust_controls.add_theme_constant_override("separation",8)
 	box.add_child(adjust_controls)
-	_scale_row(adjust_controls,"Планеты",_planet_scale(),"planets")
 	_scale_row(adjust_controls,"Солнце",_sun_scale(),"sun")
+	_scale_row(adjust_controls,"Планеты",_planet_scale(),"planets")
 	_scale_row(adjust_controls,"Спутники",_moon_scale(),"moons")
 	distance_controls = HBoxContainer.new()
 	distance_controls.add_theme_constant_override("separation",12)
 	box.add_child(distance_controls)
-	distance_controls.add_child(_label("Сжать расстояния",15))
+	distance_controls.add_child(_label("Сжатие расстояний",15))
 	compression_slider = HSlider.new()
 	compression_slider.min_value = 1.0
 	compression_slider.max_value = MAX_DISTANCE_COMPRESSION
@@ -1238,7 +1246,7 @@ func _build_scale_controls(root: Control):
 	compression_slider.custom_minimum_size = Vector2(170,44)
 	compression_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	compression_slider.focus_mode = Control.FOCUS_NONE
-	compression_slider.tooltip_text = "Уменьшение межпланетных расстояний от 1 до 50 раз. Радиусы и локальные орбиты спутников не меняются."
+	compression_slider.tooltip_text = "Уменьшение межпланетных расстояний от 1 до 500 раз. Радиусы и локальные орбиты спутников не меняются."
 	compression_slider.value_changed.connect(_set_distance_compression)
 	distance_controls.add_child(compression_slider)
 	compression_label = _label("÷ 1.0",15)
@@ -1250,10 +1258,10 @@ func _build_scale_controls(root: Control):
 func _update_readout():
 	var date = Time.get_datetime_dict_from_unix_time((sim.epoch_jd-2440587.5+sim.elapsed+sim.pending)*86400.0)
 	clock_label.text = "%02d.%02d.%04d  ·  %02d:%02d" % [date.day,date.month,date.year,date.hour,date.minute]
-	frame_label.text = ("ГАЛАКТИЧЕСКИЙ ПОЛЁТ" if galaxy else "ГЕЛИОЦЕНТРИЧЕСКИЙ ВИД") + "   /   " + ("РАЗМЕРЫ 1:1" if actual_size else "РАЗМЕРЫ УВЕЛИЧЕНЫ")
+	frame_label.text = ("ГАЛАКТИЧЕСКИЙ ПОЛЁТ" if galaxy else "ГЕЛИОЦЕНТРИЧЕСКИЙ ВИД") + "   /   " + ("РАДИУСЫ 1:1" if actual_size else "VISUAL")
 	if galaxy and not overview:
 		frame_label.text += "   /   СЛЕЖЕНИЕ"
-	scale_note.text = "Радиусы реальные · Межпланетные расстояния ÷ %.1f" % distance_compression if actual_size else "× от реального радиуса · Расстояния реальные"
+	scale_note.text = ("Радиусы ×1" if actual_size else "Радиусы Visual") + " · Расстояния ÷ %.1f" % distance_compression
 	title_label.text = NAMES[selected]
 	var radius_au = sim.position(selected).distance_to(sim.position(0))
 	var speed = 0.0

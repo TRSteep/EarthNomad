@@ -11,7 +11,7 @@ func check(condition: bool, message: String):
 		failures += 1
 
 func check_default_sizes(message: String):
-	check(app.galaxy_planet_scale==3.0 and app.galaxy_sun_scale==2.0 and app.galaxy_moon_scale==4.0 and app.helio_planet_scale==3.0 and app.helio_sun_scale==2.0 and app.helio_moon_scale==4.0,message)
+	check(app.galaxy_planet_scale==10.0 and app.galaxy_sun_scale==10.0 and app.galaxy_moon_scale==10.0 and app.helio_planet_scale==10.0 and app.helio_sun_scale==10.0 and app.helio_moon_scale==10.0,message)
 
 func check_view_buttons(expected: String):
 	for mode in app.view_buttons:
@@ -34,8 +34,8 @@ func run():
 		check(app.texture_cache[path] != null,"Loaded texture: " + path)
 	app.playing = false
 	check_view_buttons("system")
-	check_default_sizes("Startup restores 3x/2x/4x in both views despite a previous-session config")
-	check(app.planet_scale_input.value==3.0 and app.sun_scale_input.value==2.0 and app.moon_scale_input.value==4.0,"Startup controls show 3x/2x/4x")
+	check_default_sizes("Startup restores 10x/10x/10x in both views despite a previous-session config")
+	check(app.planet_scale_input.value==10.0 and app.sun_scale_input.value==10.0 and app.moon_scale_input.value==10.0,"Startup controls show 10x/10x/10x")
 	for i in range(9):
 		app._select(i)
 		app._update_bodies()
@@ -73,17 +73,17 @@ func run():
 	app._set_visual_scale(-10.0,false)
 	check(app.galaxy_planet_scale==app.VISUAL_SCALE_MIN,"Lower scale bound")
 	app._set_visual_scale(10000.0,false)
-	check(app.galaxy_planet_scale==150.0,"Planet maximum is 150x")
+	check(app.galaxy_planet_scale==500.0,"Planet maximum is 500x")
 	app._set_visual_scale(1000.0,true)
-	check(app.galaxy_sun_scale==150.0,"Sun maximum is 150x")
+	check(app.galaxy_sun_scale==50.0,"Sun maximum is 50x")
 	app._select(0)
 	app._zoom(0.9)
 	check(app.target_distance>=app._radius(0)*2.0,"Zoom bounds scale with giant Sun")
 	check(app._validated_scale(NAN,20.0)==20.0,"Corrupt saved scale rejected")
 	app._toggle_scale()
 	check(is_equal_approx(app._radius(3),6371.0084/149597870.7*20.0),"Physical scale ignores visual settings")
-	app._reset_visual_scale()
-	check(app.galaxy_planet_scale==3.0 and app.galaxy_sun_scale==2.0 and app.galaxy_moon_scale==4.0,"Scale reset restores 3x/2x/4x")
+	app._set_scale_mode(false)
+	check(app.galaxy_planet_scale==10.0 and app.galaxy_sun_scale==10.0 and app.galaxy_moon_scale==10.0,"Scale reset restores 10x/10x/10x")
 	app._reset()
 	check(app.sim.elapsed==0.0,"Reset time")
 	check(app.sim.pending==0.0,"Reset residual time")
@@ -97,7 +97,7 @@ func run():
 	check(is_equal_approx(app._radius(0),(app.RADII[0]*app.KM_TO_SCENE)*3.0),"Heliocentric Sun scale")
 	check(app.sim.p==positions and app.sim.v==velocities,"Both view sizes leave physical state unchanged")
 	app._toggle_galaxy()
-	check(app.planet_scale_input.value==3.0 and app.sun_scale_input.value==2.0,"Galactic controls restored when switching views")
+	check(app.planet_scale_input.value==10.0 and app.sun_scale_input.value==10.0,"Galactic controls restored when switching views")
 	app._inner_overview()
 	check(app.planet_scale_input.value==8.0 and app.sun_scale_input.value==3.0,"Inner group uses heliocentric sizes")
 	app._update_bodies()
@@ -112,17 +112,17 @@ func run():
 	app.labels_enabled = true
 	app.helio_planet_scale = 1.0
 	app._load_display_settings()
-	check(not app.labels_enabled and app.helio_planet_scale==3.0,"Label preference persists while startup sizes reset")
+	check(not app.labels_enabled and app.helio_planet_scale==10.0,"Label preference persists while startup sizes reset")
 	app.labels_toggle.button_pressed = true
-	app._reset_visual_scale()
-	check(app.helio_planet_scale==3.0 and app.helio_sun_scale==2.0,"Heliocentric scale reset restores 3x/2x")
+	app._set_scale_mode(false)
+	check(app.helio_planet_scale==10.0 and app.helio_sun_scale==10.0,"Heliocentric scale reset restores 10x/10x")
 	# Legacy sizes must not override new-session defaults.
 	var legacy = ConfigFile.new()
 	legacy.set_value("galaxy","planet_scale",20.0)
 	legacy.set_value("galaxy","sun_scale",1.0)
 	legacy.save(app.settings_path)
 	app._load_display_settings()
-	check_default_sizes("Legacy defaults are replaced by 3x/2x/4x")
+	check_default_sizes("Legacy defaults are replaced by 10x/10x/10x")
 	legacy.set_value("galaxy","planet_scale",1000.0)
 	legacy.set_value("galaxy","sun_scale",8.0)
 	legacy.save(app.settings_path)
@@ -225,7 +225,7 @@ func run():
 	for i in range(app.moon_nodes.size()):
 		check(app.moon_nodes[i].position==moon_positions[i],"Satellite size does not move orbits")
 	app._system_overview()
-	check(app.moon_scale_input.value==4.0,"Heliocentric satellite scale is independent")
+	check(app.moon_scale_input.value==10.0,"Heliocentric satellite scale is independent")
 	app.moon_scale_slider.value = log(7.5)/log(2.0)
 	check(is_equal_approx(app.helio_moon_scale,7.5),"Satellite slider controls heliocentric size")
 	app._save_display_settings()
@@ -234,11 +234,11 @@ func run():
 	app._load_display_settings()
 	check_default_sizes("Reload resets satellite sizes in both views")
 	app._set_moon_scale(500.0)
-	check(app.helio_moon_scale==150.0,"Satellite size respects the 150x limit")
+	check(app.helio_moon_scale==500.0,"Satellite size respects the 500x limit")
 	app._toggle_scale()
 	check(is_equal_approx(app._moon_radius(0),1737.4/149597870.7*20.0),"Physical satellite size ignores exaggeration")
-	app._reset_visual_scale()
-	check(app.helio_moon_scale==4.0,"Display reset restores satellite default")
+	app._set_scale_mode(false)
+	check(app.helio_moon_scale==10.0,"Display reset restores satellite default")
 	legacy.set_value("display","schema",2)
 	legacy.set_value("galaxy","planet_scale",20.0)
 	legacy.set_value("galaxy","sun_scale",1.0)
@@ -277,8 +277,8 @@ func run():
 	for i in range(app.bodies.size()):
 		check(app.bodies[i].position==fixed_planets[i],"Size changes do not move planetary centers")
 	app.physical_mode_button.pressed.emit()
-	check(app.actual_size and app.physical_mode_button.disabled and not app.adjust_mode_button.disabled,"1:1 is a selectable scale mode")
-	check(not app.adjust_controls.visible and app.distance_controls.visible,"1:1 shows only the distance slider")
+	check(app.actual_size and app.physical_mode_button.button_pressed and not app.visual_mode_button.button_pressed,"1:1 is a selectable scale mode")
+	check(app.adjust_controls.visible and app.distance_controls.visible,"All four controls remain visible in 1:1")
 	check(is_equal_approx(app._radius(3),6371.0084*app.KM_TO_SCENE),"1:1 restores actual Earth radius")
 	var physical_earth_radius: float = app._radius(3)
 	var physical_moon_radius: float = app._moon_radius(0)
@@ -291,12 +291,12 @@ func run():
 		var actual_relative = app.moon_nodes[i].position-app.bodies[parent].position
 		var fixed_relative = fixed_moons[i]-fixed_planets[parent]
 		check(actual_relative.distance_to(fixed_relative)<0.0001,"Compression preserves local satellite orbits")
-	app.adjust_mode_button.pressed.emit()
+	app.visual_mode_button.pressed.emit()
 	app._update_bodies()
-	check(not app.actual_size and app.adjust_controls.visible and not app.distance_controls.visible,"Adjust mode shows three size sliders")
-	check(is_equal_approx(app._radius(3),6371.0084*app.KM_TO_SCENE*12.0),"Adjusted sizes multiply the real radius")
+	check(not app.actual_size and app.adjust_controls.visible and app.distance_controls.visible,"Adjust mode shows three size sliders")
+	check(is_equal_approx(app._radius(3),6371.0084*app.KM_TO_SCENE*10.0),"Visual loads the preset radius")
 	for i in range(app.bodies.size()):
-		check(app.bodies[i].position==fixed_planets[i],"Adjust mode always restores real interplanetary distances")
+		check(app.bodies[i].position.distance_to(fixed_planets[i]/25.0-(app.satellites.position_km(0,app.sim.epoch_jd)*app.KM_TO_SCENE*0.0121505856*(1.0-1.0/25.0) if i==3 else Vector3.ZERO))<0.00001,"Visual preserves independent distance compression")
 	app._select_moon(0)
 	var before_hiding = app.sim.p.duplicate()
 	app.moons_toggle.button_pressed = false
@@ -319,27 +319,48 @@ func run():
 		check_view_buttons(mode)
 		app._set_overview()
 		check_view_buttons(mode)
-	# The visible Reset is a size action; time, selection and the other view stay intact.
+	# Presets reload the file and act on radii independently of compression.
 	app._activate_view("galaxy")
-	app._set_visual_scale(150.0,false)
-	app._set_visual_scale(150.0,true)
-	app._set_moon_scale(150.0)
-	app._set_scale_mode(true)
-	app._set_distance_compression(50.0)
-	var reset_time: float = app.sim.elapsed+app.sim.pending
-	var reset_selected: int = app.selected
-	var other_sizes = [app.helio_planet_scale,app.helio_sun_scale,app.helio_moon_scale]
-	app.reset_size_button.pressed.emit()
-	check(app.adjust_mode_button.text=="Size" and app.reset_size_button.text=="Reset","Size panel uses requested captions")
-	check(not app.actual_size and app.galaxy_planet_scale==3.0 and app.galaxy_sun_scale==2.0 and app.galaxy_moon_scale==4.0,"Reset button restores Size and 3x/2x/4x")
-	check(app.sim.elapsed+app.sim.pending==reset_time and app.selected==reset_selected,"Size reset preserves time and selection")
-	check([app.helio_planet_scale,app.helio_sun_scale,app.helio_moon_scale]==other_sizes,"Size reset affects only the current view")
-	check(is_equal_approx(app.target_distance,2000.0),"Size reset restores uncompressed flight framing")
-	for control in [app.planet_scale_input,app.sun_scale_input,app.moon_scale_input]:
-		control.value = 150.0
-		check(control.value==150.0,"Size input accepts 150x")
-	for control in [app.planet_scale_slider,app.sun_scale_slider,app.moon_scale_slider]:
-		check(is_equal_approx(pow(2.0,control.max_value),150.0),"Size slider reaches 150x")
+	app._set_distance_compression(500.0)
+	var preset_time: float = app.sim.elapsed+app.sim.pending
+	var preset_selected: int = app.selected
+	app.physical_mode_button.pressed.emit()
+	check(app._planet_scale()==1.0 and app._sun_scale()==1.0 and app._moon_scale()==1.0,"1:1 sets all actual multipliers to one")
+	check(app.planet_scale_input.value==1.0 and app.sun_scale_input.value==1.0 and app.moon_scale_input.value==1.0,"1:1 updates all numeric controls")
+	check(app.distance_compression==500.0,"1:1 preserves the distance slider")
+	check(app.physical_mode_button.get_parent().get_child_count()==2,"Only 1:1 and Visual buttons remain")
+	check(app.visual_mode_button.text=="Visual","Visual caption")
+	var preset_path = "user://test-visual.cfg"
+	var preset = ConfigFile.new()
+	preset.set_value("sizes","sun",12.0)
+	preset.set_value("sizes","planets",24.0)
+	preset.set_value("sizes","moons",36.0)
+	preset.save(preset_path)
+	app.visual_preset_path = preset_path
+	app.visual_mode_button.pressed.emit()
+	check(app._sun_scale()==12.0 and app._planet_scale()==24.0 and app._moon_scale()==36.0,"Visual reads distinct file values")
+	preset.set_value("sizes","planets",42.0)
+	preset.save(preset_path)
+	app.visual_mode_button.pressed.emit()
+	check(app._planet_scale()==42.0,"Clicking Visual again reloads the edited file")
+	check(app.distance_compression==500.0 and app.sim.elapsed+app.sim.pending==preset_time and app.selected==preset_selected,"Presets preserve compression, time and selection")
+	preset.set_value("sizes","sun",500.0)
+	preset.set_value("sizes","planets",0.1)
+	preset.set_value("sizes","moons","invalid")
+	preset.save(preset_path)
+	app.visual_mode_button.pressed.emit()
+	check(app._sun_scale()==50.0 and app._planet_scale()==1.0 and app._moon_scale()==10.0,"Preset values are bounded and invalid values use defaults")
+	app.visual_preset_path = ""
+	app.visual_mode_button.pressed.emit()
+	check(app._sun_scale()==10.0 and app._planet_scale()==10.0 and app._moon_scale()==10.0,"Shipped Visual preset sets ten for all bodies")
+	for pair in [[app.sun_scale_input,50.0],[app.planet_scale_input,500.0],[app.moon_scale_input,500.0]]:
+		pair[0].value = pair[1]
+		check(pair[0].value==pair[1] and pair[0].min_value==1.0,"Distinct radius input range")
+	for pair in [[app.sun_scale_slider,50.0],[app.planet_scale_slider,500.0],[app.moon_scale_slider,500.0]]:
+		check(is_equal_approx(pow(2.0,pair[0].max_value),pair[1]) and pair[0].min_value==0.0,"Distinct radius slider range")
+	app.compression_slider.value = 999.0
+	check(app.distance_compression==500.0,"Distance compression has a 500x limit")
+	DirAccess.remove_absolute(preset_path)
 	print("APP: ", "PASS" if failures==0 else "FAIL")
 	app.queue_free()
 	await process_frame

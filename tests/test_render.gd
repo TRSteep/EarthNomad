@@ -55,12 +55,14 @@ func run():
 		push_error("Hidden satellite geometry is still visible")
 		failures += 1
 	app.moons_toggle.button_pressed = true
-	app.adjust_mode_button.pressed.emit()
+	app.visual_mode_button.pressed.emit()
 	# Verify that the new fill actually reveals a surface facing away from the Sun.
-	app._reset_visual_scale()
+	app._set_scale_mode(false)
 	app._select(4)
 	app.yaw += PI
 	app.pitch = -app.pitch
+	# Sample the surface itself: the four-row size panel may cover the center.
+	app.ui.visible = false
 	app.materials[4].set_shader_parameter("night_fill",0.0)
 	await process_frame
 	await RenderingServer.frame_post_draw
@@ -77,6 +79,7 @@ func run():
 		failures += 1
 	print("Night-side center luminance: ",dark," -> ",filled)
 	filled_image.save_png("res://build/night-side-v0.8.0.png")
+	app.ui.visible = true
 	app._select(5)
 	app._satellite_system()
 	await process_frame
@@ -131,17 +134,25 @@ func run():
 	if nav_bottom>root.get_visible_rect().size.y-112.0:
 		push_error("Navigation overlaps the time controls")
 		failures += 1
-	app.planet_scale_input.value = 150.0
-	app.sun_scale_input.value = 150.0
-	app.moon_scale_input.value = 150.0
+	app.planet_scale_input.value = 500.0
+	app.sun_scale_input.value = 50.0
+	app.moon_scale_input.value = 500.0
+	app.compression_slider.value = 500.0
+	app._system_overview()
+	await process_frame
+	await RenderingServer.frame_post_draw
+	if app.camera.position.distance_to(app.bodies[0].position)<=app._radius(0):
+		push_error("Maximum compression places the overview inside the Sun")
+		failures += 1
 	app._satellite_system()
 	await process_frame
 	await RenderingServer.frame_post_draw
-	app.reset_size_button.pressed.emit()
+	app.visual_mode_button.pressed.emit()
+	app.compression_slider.value = 1.0
 	app._select(3)
 	await process_frame
 	await RenderingServer.frame_post_draw
-	root.get_texture().get_image().save_png("res://build/size-reset-v0.8.1.png")
+	root.get_texture().get_image().save_png("res://build/visual-controls-v0.9.0.png")
 	print("RENDER: ","PASS" if failures==0 else "FAIL", " (real geometry; compressed flight; satellite orbits/trails; GPU endpoints; UI layout; night fill)")
 	app.queue_free()
 	await process_frame

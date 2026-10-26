@@ -12,7 +12,7 @@ $stage = Join-Path $root "build/package-$version"
 New-Item -ItemType Directory -Force "$stage/docs" | Out-Null
 New-Item -ItemType Directory -Force "$stage/docs/images" | Out-Null
 Copy-Item "build/EarthNomad-$version-Windows.exe" "$stage/EarthNomad.exe" -Force
-Copy-Item README.md,CHANGELOG.md,ATTRIBUTION.md,VERSION $stage -Force
+Copy-Item README.md,CHANGELOG.md,ATTRIBUTION.md,VERSION,visual.cfg $stage -Force
 Copy-Item docs/PHYSICS.md "$stage/docs/PHYSICS.md" -Force
 Copy-Item docs/SATELLITES.md "$stage/docs/SATELLITES.md" -Force
 Copy-Item docs/SCALE_AUDIT.md "$stage/docs/SCALE_AUDIT.md" -Force

@@ -31,16 +31,15 @@ func expected_center(body: int, origin: int, compression: float) -> Vector3:
 
 func check_geometry(physical: bool, compression: float, factor: float):
 	app._set_scale_mode(physical)
-	if physical:
-		app._set_distance_compression(compression)
-	else:
+	app._set_distance_compression(compression)
+	if not physical:
 		app._set_visual_scale(factor,false)
 		app._set_visual_scale(factor,true)
 		app._set_moon_scale(factor)
 	app._update_bodies()
 	var multiplier = 1.0 if physical else factor
 	for i in range(9):
-		check(abs(app.bodies[i].scale.x/(20.0/AU_KM)-RADII_KM[i]*multiplier)<RADII_KM[i]*multiplier*0.000001,"Rendered planetary radius in km: %d" % i)
+		check(abs(app.bodies[i].scale.x/(20.0/AU_KM)-RADII_KM[i]*(minf(multiplier,50.0) if i==0 else multiplier))<RADII_KM[i]*(minf(multiplier,50.0) if i==0 else multiplier)*0.000001,"Rendered planetary radius in km: %d" % i)
 		for j in range(i):
 			var expected = expected_center(i,0,compression).distance_to(expected_center(j,0,compression))
 			check(abs(app.bodies[i].position.distance_to(app.bodies[j].position)-expected)<maxf(0.00001,expected*0.000001),"Interplanetary center distance: %d/%d" % [i,j])
@@ -69,8 +68,9 @@ func run():
 			var km = Vector3(position[0],position[1],position[2]).length()*AU_KM
 			check(abs(km/(PLANET_RANGES[i][endpoint]*1000000.0)-1.0)<0.015,"Planetary ellipse has the reference physical extent")
 	for physical in [false,true]:
-		for factor in ([1.0,4.0,5.0,50.0] if physical else [1.0,4.0,5.0,50.0,150.0]):
+		for factor in ([1.0,4.0,5.0,50.0,500.0] if physical else [1.0,4.0,5.0,50.0,150.0,500.0]):
 			check_geometry(physical,factor if physical else 1.0,factor)
+	check_geometry(false,500.0,500.0)
 	app._set_scale_mode(true)
 	app._set_distance_compression(1.0)
 	var report = {"planets":[],"moons":[]}
@@ -94,6 +94,7 @@ func run():
 	for i in range(9):
 		for item in app.history:
 			samples.append(app._trajectory_point(i,item.day,app._relative_sample_position(i,item.p)))
+	app._set_distance_compression(1.0)
 	app._set_scale_mode(false)
 	for factor in [4.0,5.0,50.0,150.0]:
 		app._set_visual_scale(factor,false)
@@ -103,7 +104,7 @@ func run():
 				check(app._trajectory_point(i,item.day,app._relative_sample_position(i,item.p))==samples[sample],"Radius mode does not change flight trajectory")
 				sample += 1
 	app._set_scale_mode(true)
-	for compression in [5.0,50.0]:
+	for compression in [5.0,50.0,500.0]:
 		app._set_distance_compression(compression)
 		var sample = 0
 		for i in range(9):
