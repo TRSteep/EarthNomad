@@ -13,6 +13,11 @@ func check(condition: bool, message: String):
 func check_default_sizes(message: String):
 	check(app.galaxy_planet_scale==3.0 and app.galaxy_sun_scale==2.0 and app.galaxy_moon_scale==4.0 and app.helio_planet_scale==3.0 and app.helio_sun_scale==2.0 and app.helio_moon_scale==4.0,message)
 
+func check_view_buttons(expected: String):
+	for mode in app.view_buttons:
+		check(app.view_buttons[mode].disabled==(mode==expected),"Only the current view button is disabled")
+		check(app.view_buttons[mode].button_pressed==(mode==expected),"Exactly one view button is selected")
+
 func run():
 	app = load("res://main.tscn").instantiate()
 	app.settings_path = "user://test-display.cfg"
@@ -28,6 +33,7 @@ func run():
 	for path in app.texture_cache:
 		check(app.texture_cache[path] != null,"Loaded texture: " + path)
 	app.playing = false
+	check_view_buttons("system")
 	check_default_sizes("Startup restores 3x/2x/4x in both views despite a previous-session config")
 	check(app.planet_scale_input.value==3.0 and app.sun_scale_input.value==2.0 and app.moon_scale_input.value==4.0,"Startup controls show 3x/2x/4x")
 	for i in range(9):
@@ -51,11 +57,11 @@ func run():
 	app.planet_scale_input.value = 37.5
 	app._update_bodies()
 	check(not app.actual_size,"Scale editor leaves physical-size mode")
-	check(is_equal_approx(app._radius(3),app.DISPLAY_RADII[3]*37.5),"Arbitrary planet scale")
-	check(is_equal_approx(app._radius(0),app.DISPLAY_RADII[0]*app.DEFAULT_SUN_SCALE),"Planet scale leaves Sun independent")
+	check(is_equal_approx(app._radius(3),(app.RADII[3]*app.KM_TO_SCENE)*37.5),"Arbitrary planet scale")
+	check(is_equal_approx(app._radius(0),(app.RADII[0]*app.KM_TO_SCENE)*app.DEFAULT_SUN_SCALE),"Planet scale leaves Sun independent")
 	check(app.sim.p==positions and app.sim.v==velocities,"Display scale cannot change dynamics")
 	app.sun_scale_slider.value = log(8.0)/log(2.0)
-	check(is_equal_approx(app._radius(0),app.DISPLAY_RADII[0]*8.0),"Independent Sun slider")
+	check(is_equal_approx(app._radius(0),(app.RADII[0]*app.KM_TO_SCENE)*8.0),"Independent Sun slider")
 	app._select(3)
 	var tracked_distance: float = app.target_distance
 	app._set_visual_scale(25.0,false)
@@ -87,8 +93,8 @@ func run():
 	check(not app.galaxy and app.size_panel.visible,"Heliocentric size controls are visible")
 	app.planet_scale_input.value = 8.0
 	app.sun_scale_input.value = 3.0
-	check(is_equal_approx(app._radius(3),app.DISPLAY_RADII[3]*8.0),"Heliocentric planet scale")
-	check(is_equal_approx(app._radius(0),app.DISPLAY_RADII[0]*3.0),"Heliocentric Sun scale")
+	check(is_equal_approx(app._radius(3),(app.RADII[3]*app.KM_TO_SCENE)*8.0),"Heliocentric planet scale")
+	check(is_equal_approx(app._radius(0),(app.RADII[0]*app.KM_TO_SCENE)*3.0),"Heliocentric Sun scale")
 	check(app.sim.p==positions and app.sim.v==velocities,"Both view sizes leave physical state unchanged")
 	app._toggle_galaxy()
 	check(app.planet_scale_input.value==3.0 and app.sun_scale_input.value==2.0,"Galactic controls restored when switching views")
@@ -246,6 +252,73 @@ func run():
 	check(app.distance>=app._radius(0)*2.0,"Selecting a large target cannot put tracking camera inside it")
 	app._set_visual_scale(50.0,true)
 	check(app.distance>=app._radius(0)*2.0,"Growing a tracked target preserves camera clearance")
+	# Radius edits must not move satellites, their parents, or any orbit geometry.
+	app._reset()
+	app._system_overview()
+	app._update_bodies()
+	var fixed_moons: Array[Vector3] = []
+	var fixed_planets: Array[Vector3] = []
+	var fixed_orbits: Array[Transform3D] = []
+	var fixed_bounds: Array[AABB] = []
+	for body in app.moon_nodes:
+		fixed_moons.append(body.position)
+	for body in app.bodies:
+		fixed_planets.append(body.position)
+	for orbit in app.moon_orbits:
+		fixed_orbits.append(orbit.transform)
+		fixed_bounds.append(orbit.mesh.get_aabb())
+	app._set_visual_scale(12.0,false)
+	app._set_visual_scale(7.0,true)
+	app._set_moon_scale(11.0)
+	app._update_bodies()
+	for i in range(app.moon_nodes.size()):
+		check(app.moon_nodes[i].position==fixed_moons[i],"Planet and moon sizes leave satellite coordinates unchanged")
+		check(app.moon_orbits[i].transform==fixed_orbits[i] and app.moon_orbits[i].mesh.get_aabb()==fixed_bounds[i],"Planet size leaves satellite orbit geometry unchanged")
+	for i in range(app.bodies.size()):
+		check(app.bodies[i].position==fixed_planets[i],"Size changes do not move planetary centers")
+	app.physical_mode_button.pressed.emit()
+	check(app.actual_size and app.physical_mode_button.disabled and not app.adjust_mode_button.disabled,"1:1 is a selectable scale mode")
+	check(not app.adjust_controls.visible and app.distance_controls.visible,"1:1 shows only the distance slider")
+	check(is_equal_approx(app._radius(3),6371.0*app.KM_TO_SCENE),"1:1 restores actual Earth radius")
+	var physical_earth_radius: float = app._radius(3)
+	var physical_moon_radius: float = app._moon_radius(0)
+	app.compression_slider.value = 25.0
+	app._update_bodies()
+	check(app._radius(3)==physical_earth_radius and app._moon_radius(0)==physical_moon_radius,"Compression preserves real sizes")
+	check(is_equal_approx(app.bodies[5].position.length(),fixed_planets[5].length()/25.0),"Interplanetary distance is compressed by the selected factor")
+	for i in range(app.moon_nodes.size()):
+		var parent = int(app.satellites.data[i].parent)
+		var actual_relative = app.moon_nodes[i].position-app.bodies[parent].position
+		var fixed_relative = fixed_moons[i]-fixed_planets[parent]
+		check(actual_relative.distance_to(fixed_relative)<0.0001,"Compression preserves local satellite orbits")
+	app.adjust_mode_button.pressed.emit()
+	app._update_bodies()
+	check(not app.actual_size and app.adjust_controls.visible and not app.distance_controls.visible,"Adjust mode shows three size sliders")
+	check(is_equal_approx(app._radius(3),6371.0*app.KM_TO_SCENE*12.0),"Adjusted sizes multiply the real radius")
+	for i in range(app.bodies.size()):
+		check(app.bodies[i].position==fixed_planets[i],"Adjust mode always restores real interplanetary distances")
+	app._select_moon(0)
+	var before_hiding = app.sim.p.duplicate()
+	app.moons_toggle.button_pressed = false
+	check(app.selected_moon==-1,"Hiding the focused satellite returns to its planet")
+	check(app.moon_nodes.all(func(body): return not body.visible),"Satellite toggle hides all twenty moons")
+	check(app.moon_orbits.all(func(orbit): return not orbit.visible) and app.moon_labels.all(func(label): return not label.visible),"Satellite toggle also hides orbits and labels")
+	check(app.moon_picker.disabled and app.satellite_system_button.disabled,"Satellite controls are disabled while hidden")
+	check(app.sim.p==before_hiding,"Visibility does not change the physics state")
+	app._save_display_settings()
+	app.moons_enabled = true
+	app._load_display_settings()
+	check(not app.moons_enabled,"Satellite visibility preference survives reload")
+	app._set_moons_enabled(true)
+	check(app.moon_nodes.all(func(body): return body.visible),"Satellites can be restored")
+	for mode in ["inner","galaxy","system"]:
+		app.view_buttons[mode].pressed.emit()
+		check(app.view_mode==mode and app.galaxy==(mode=="galaxy"),"View buttons activate their explicit mode")
+		check_view_buttons(mode)
+		app._select(5)
+		check_view_buttons(mode)
+		app._set_overview()
+		check_view_buttons(mode)
 	print("APP: ", "PASS" if failures==0 else "FAIL")
 	app.queue_free()
 	await process_frame

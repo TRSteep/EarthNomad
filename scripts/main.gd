@@ -6,17 +6,18 @@ const IDS = ["sun", "mercury", "venus", "earth", "mars", "jupiter", "saturn", "u
 const NAMES = ["Солнце", "Меркурий", "Венера", "Земля", "Марс", "Юпитер", "Сатурн", "Уран", "Нептун"]
 const KINDS = ["ЗВЕЗДА · G2V", "КАМЕННАЯ ПЛАНЕТА", "КАМЕННАЯ ПЛАНЕТА", "НАШ ДОМ", "КАМЕННАЯ ПЛАНЕТА", "ГАЗОВЫЙ ГИГАНТ", "ГАЗОВЫЙ ГИГАНТ", "ЛЕДЯНОЙ ГИГАНТ", "ЛЕДЯНОЙ ГИГАНТ"]
 const RADII = [695700.0,2439.7,6051.8,6371.0,3389.5,69911.0,58232.0,25362.0,24622.0]
-const DISPLAY_RADII = [2.5,0.26,0.58,0.62,0.38,1.5,1.3,0.95,0.92]
 const TILTS = [7.25,0.034,2.64,23.44,25.19,3.13,26.73,82.23,28.32]
 const ROTATIONS = [609.12,1407.6,-5832.5,23.9345,24.6229,9.925,10.656,-17.24,16.11]
 const COLORS = [Color("ffd69a"),Color("b4afa9"),Color("dec69b"),Color("71c9ec"),Color("dc9473"),Color("d7b190"),Color("e6d1a2"),Color("9cdfdf"),Color("658eee")]
 const SCALE = 20.0
+const KM_TO_SCENE = SCALE/Physics.AU_KM
+const MAX_DISTANCE_COMPRESSION = 50.0
 const VISUAL_SCALE_MIN = 0.1
 const VISUAL_SCALE_MAX = 50.0
 const DEFAULT_PLANET_SCALE = 3.0
 const DEFAULT_SUN_SCALE = 2.0
 const DEFAULT_MOON_SCALE = 4.0
-const DISPLAY_SETTINGS_VERSION = 4
+const DISPLAY_SETTINGS_VERSION = 5
 const MOON_ORBIT_DASHES = 96
 const SETTINGS_PATH = "user://display.cfg"
 const SPEEDS = [0.000011574074,0.0416667,1.0,10.0,40.0,120.0]
@@ -46,7 +47,9 @@ var camera = Camera3D.new()
 var selected = 3
 var overview = false
 var galaxy = false
+var view_mode = "system"
 var actual_size = false
+var distance_compression = 1.0
 var galaxy_planet_scale = DEFAULT_PLANET_SCALE
 var galaxy_sun_scale = DEFAULT_SUN_SCALE
 var galaxy_moon_scale = DEFAULT_MOON_SCALE
@@ -54,6 +57,7 @@ var helio_planet_scale = DEFAULT_PLANET_SCALE
 var helio_sun_scale = DEFAULT_SUN_SCALE
 var helio_moon_scale = DEFAULT_MOON_SCALE
 var labels_enabled = true
+var moons_enabled = true
 var playing = true
 var speed_index = 1
 var yaw = 0.0
@@ -86,6 +90,14 @@ var settings_path = SETTINGS_PATH
 var labels_toggle: CheckButton
 var scale_heading: Label
 var navigation_box: VBoxContainer
+var view_buttons: Dictionary = {}
+var moons_toggle: CheckButton
+var physical_mode_button: Button
+var adjust_mode_button: Button
+var adjust_controls: VBoxContainer
+var distance_controls: HBoxContainer
+var compression_slider: HSlider
+var compression_label: Label
 
 func _ready():
 	_load_display_settings()
@@ -113,9 +125,11 @@ func _ready():
 	if "--overview" in startup_args:
 		_set_overview()
 	if "--galaxy" in startup_args:
-		galaxy = true
-		_set_overview()
-		_seed_history()
+		_activate_view("galaxy")
+	if "--inner" in startup_args:
+		_activate_view("inner")
+	if "--physical" in startup_args:
+		_set_scale_mode(true)
 	for argument in startup_args:
 		if argument.begins_with("--follow="):
 			_select(clampi(int(argument.get_slice("=",1)),0,8))
@@ -284,7 +298,7 @@ func _build_moons():
 			for fraction in [0.0,0.58]:
 				mesh.surface_set_color(Color(0.4,0.6,0.75,0.32))
 				var angle = TAU*(float(k)+fraction)/float(MOON_ORBIT_DASHES)
-				mesh.surface_add_vertex(satellites.position_km(i,sim.epoch_jd,angle)/RADII[int(d.parent)])
+				mesh.surface_add_vertex(satellites.position_km(i,sim.epoch_jd,angle)*KM_TO_SCENE)
 		mesh.surface_end()
 		var orbit = MeshInstance3D.new()
 		orbit.mesh = mesh
@@ -294,10 +308,7 @@ func _build_moons():
 
 func _moon_radius(index: int) -> float:
 	var d: Dictionary = satellites.data[index]
-	if actual_size:
-		return d.radius_km/Physics.AU_KM*SCALE
-	# An independent visual size; changing it never moves a satellite's orbit.
-	return DISPLAY_RADII[int(d.parent)]*d.radius_km/RADII[int(d.parent)]*_moon_scale()
+	return d.radius_km*KM_TO_SCENE*(1.0 if actual_size else _moon_scale())
 
 func _focus_radius() -> float:
 	return _moon_radius(selected_moon) if selected_moon>=0 else _radius(selected)
@@ -306,7 +317,7 @@ func _system_extent() -> float:
 	var extent = _radius(selected)*2.5
 	for i in satellites.indices(selected):
 		var d: Dictionary = satellites.data[i]
-		extent = maxf(extent,d.a_km*(1.0+d.e)/RADII[selected]*_radius(selected)+_moon_radius(i))
+		extent = maxf(extent,d.a_km*(1.0+d.e)*KM_TO_SCENE+_moon_radius(i))
 	return extent
 
 func _refresh_moon_picker():
@@ -314,12 +325,14 @@ func _refresh_moon_picker():
 	moon_picker.add_item("Выбрать спутник…",1000)
 	for i in satellites.indices(selected):
 		moon_picker.add_item(satellites.data[i].name,i)
-	moon_picker.disabled = moon_picker.item_count==1
+	moon_picker.disabled = not moons_enabled or moon_picker.item_count==1
 	satellite_system_button.disabled = moon_picker.disabled
 	if selected_moon>=0:
 		moon_picker.select(moon_picker.get_item_index(selected_moon))
 
 func _select_moon(index: int):
+	if not moons_enabled:
+		_set_moons_enabled(true)
 	selected = int(satellites.data[index].parent)
 	selected_moon = index
 	satellite_system_view = false
@@ -339,6 +352,8 @@ func _select_moon(index: int):
 func _satellite_system():
 	if satellites.indices(selected).is_empty():
 		return
+	if not moons_enabled:
+		_set_moons_enabled(true)
 	selected_moon = -1
 	satellite_system_view = true
 	overview = false
@@ -351,20 +366,20 @@ func _update_moons():
 	var jd = sim.epoch_jd+sim.elapsed+sim.pending
 	# The planetary integrator contains Earth+Moon mass once, at their barycenter.
 	# Split their local display positions; do not add lunar mass to the integrator again.
-	var earth_moon = satellites.position_km(0,jd)/RADII[3]*_radius(3)
+	var earth_moon = satellites.position_km(0,jd)*KM_TO_SCENE
 	bodies[3].position -= earth_moon*0.0121505856
 	for i in range(moon_nodes.size()):
 		var d: Dictionary = satellites.data[i]
 		var parent = int(d.parent)
-		var units = _radius(parent)/RADII[parent]
-		var relative = satellites.position_km(i,jd)*units
-		moon_nodes[i].visible = true
-		moon_orbits[i].visible = overview or galaxy or (satellite_system_view and parent==selected)
+		var relative = satellites.position_km(i,jd)*KM_TO_SCENE
+		moon_nodes[i].visible = moons_enabled
+		moon_orbits[i].visible = moons_enabled and (overview or galaxy or (satellite_system_view and parent==selected))
 		moon_orbits[i].position = bodies[parent].position
-		moon_orbits[i].scale = Vector3.ONE*_radius(parent)
+		moon_orbits[i].scale = Vector3.ONE
 		moon_nodes[i].position = bodies[parent].position+relative
-		moon_nodes[i].scale = Vector3.ONE*_moon_radius(i)
-		moon_nodes[i].look_at(bodies[parent].position,satellites.orbit_normal(i))
+		# Orient from the exact local offset, avoiding cancellation for tiny moons
+		# when their parent is far from the floating origin.
+		moon_nodes[i].basis = Basis.looking_at(-relative,satellites.orbit_normal(i)).scaled(Vector3.ONE*_moon_radius(i))
 		var light = (-sim.relative_position(parent,0)).normalized()
 		moon_materials[i].set_shader_parameter("sun_direction",light)
 		moon_materials[i].set_shader_parameter("parent_center",bodies[parent].position)
@@ -395,11 +410,11 @@ func _build_orbits():
 		orbit_root.add_child(instance)
 
 func _radius(i: int) -> float:
-	if actual_size:
-		return RADII[i] / Physics.AU_KM * SCALE
-	# Visual exaggeration never enters Physics or the sampled trajectories.
 	var multiplier = _sun_scale() if i == 0 else _planet_scale()
-	return DISPLAY_RADII[i] * multiplier
+	return RADII[i]*KM_TO_SCENE*(1.0 if actual_size else multiplier)
+
+func _interplanet_scale() -> float:
+	return 1.0/distance_compression if actual_size else 1.0
 
 func _planet_scale() -> float:
 	return galaxy_planet_scale if galaxy else helio_planet_scale
@@ -423,6 +438,8 @@ func _load_display_settings():
 	if settings.load(settings_path) == OK:
 		var saved_labels = settings.get_value("display","labels_enabled",true)
 		labels_enabled = saved_labels if saved_labels is bool else true
+		var saved_moons = settings.get_value("display","moons_enabled",true)
+		moons_enabled = saved_moons if saved_moons is bool else true
 
 func _restore_default_sizes():
 	galaxy_planet_scale = DEFAULT_PLANET_SCALE
@@ -432,10 +449,12 @@ func _restore_default_sizes():
 	helio_sun_scale = DEFAULT_SUN_SCALE
 	helio_moon_scale = DEFAULT_MOON_SCALE
 	actual_size = false
+	distance_compression = 1.0
 
 func _save_display_settings():
 	var settings = ConfigFile.new()
 	settings.set_value("display","labels_enabled",labels_enabled)
+	settings.set_value("display","moons_enabled",moons_enabled)
 	settings.set_value("display","schema",DISPLAY_SETTINGS_VERSION)
 	var error = settings.save(settings_path)
 	if error != OK:
@@ -446,7 +465,6 @@ func _exit_tree():
 		_save_display_settings()
 
 func _set_visual_scale(value: float, sun: bool):
-	var old_radius = _focus_radius()
 	var safe = _validated_scale(value,DEFAULT_SUN_SCALE if sun else DEFAULT_PLANET_SCALE)
 	if galaxy:
 		if sun:
@@ -461,16 +479,10 @@ func _set_visual_scale(value: float, sun: bool):
 	# Editing the artistic scale explicitly leaves true-size mode.
 	actual_size = false
 	_sync_scale_controls()
-	if not overview and not galaxy:
-		# Keep a close-up camera outside an enlarged body without changing its angle.
-		var ratio = _focus_radius()/old_radius
-		distance *= ratio
-		target_distance *= ratio
 	_ensure_follow_clearance()
 	settings_timer.start()
 
 func _set_moon_scale(value: float):
-	var old_radius = _focus_radius()
 	var safe = _validated_scale(value,DEFAULT_MOON_SCALE)
 	if galaxy:
 		galaxy_moon_scale = safe
@@ -478,15 +490,11 @@ func _set_moon_scale(value: float):
 		helio_moon_scale = safe
 	actual_size = false
 	_sync_scale_controls()
-	if not overview and not galaxy:
-		var ratio = _focus_radius()/old_radius
-		distance *= ratio
-		target_distance *= ratio
 	_ensure_follow_clearance()
 	settings_timer.start()
 
 func _ensure_follow_clearance():
-	if galaxy and not overview:
+	if not overview:
 		var minimum = _focus_radius()*2.0
 		distance = maxf(distance,minimum)
 		target_distance = maxf(target_distance,minimum)
@@ -510,6 +518,48 @@ func _sync_scale_controls():
 	sun_scale_input.set_value_no_signal(_sun_scale())
 	moon_scale_input.set_value_no_signal(_moon_scale())
 	scale_heading.text = "РАЗМЕР ОБЪЕКТОВ · " + ("ГАЛАКТИКА" if galaxy else "ГЕЛИОЦЕНТРИЧЕСКИЙ ВИД")
+	physical_mode_button.set_pressed_no_signal(actual_size)
+	adjust_mode_button.set_pressed_no_signal(not actual_size)
+	physical_mode_button.disabled = actual_size
+	adjust_mode_button.disabled = not actual_size
+	adjust_controls.visible = not actual_size
+	distance_controls.visible = actual_size
+	compression_slider.set_value_no_signal(distance_compression)
+	compression_label.text = "÷ %.1f" % distance_compression
+	_layout_scale_panel.call_deferred()
+
+func _set_scale_mode(physical: bool):
+	actual_size = physical
+	_sync_scale_controls()
+	_update_bodies()
+	_ensure_follow_clearance()
+	if galaxy:
+		_draw_trails()
+
+func _set_distance_compression(value: float):
+	if not actual_size:
+		return
+	distance_compression = clampf(value,1.0,MAX_DISTANCE_COMPRESSION) if is_finite(value) else 1.0
+	_sync_scale_controls()
+	_update_bodies()
+	if galaxy:
+		_draw_trails()
+
+func _layout_scale_panel():
+	if not is_instance_valid(size_panel):
+		return
+	size_panel.size = size_panel.get_combined_minimum_size()
+	size_panel.position = Vector2(270,maxf(105.0,size_panel.get_parent_control().size.y-130.0-size_panel.size.y))
+
+func _set_moons_enabled(enabled: bool):
+	moons_enabled = enabled
+	moons_toggle.set_pressed_no_signal(enabled)
+	if not enabled and selected_moon>=0:
+		_select(selected)
+	_refresh_moon_picker()
+	_update_bodies()
+	_update_labels()
+	settings_timer.start()
 
 func _set_labels_enabled(enabled: bool):
 	labels_enabled = enabled
@@ -522,7 +572,7 @@ func _update_bodies():
 	for i in range(9):
 		# Selection changes the camera target, never the contents of the scene.
 		bodies[i].visible = true
-		bodies[i].position = sim.relative_position(i,origin)*SCALE
+		bodies[i].position = sim.relative_position(i,origin)*SCALE*_interplanet_scale()
 		bodies[i].scale = Vector3.ONE * _radius(i)
 		spins[i].rotation.y = fmod((sim.elapsed+sim.pending)*24.0/ROTATIONS[i]*TAU, TAU)
 		var light = (-sim.relative_position(i,0)).normalized() if i != 0 else Vector3.UP
@@ -539,6 +589,7 @@ func _update_bodies():
 		labels[i].visible = (overview or galaxy) and labels_enabled
 		labels[i].scale = Vector3.ONE * maxf(1.0,distance/120.0)
 	orbit_root.visible = overview and not galaxy
+	orbit_root.scale = Vector3.ONE*_interplanet_scale()
 	trail_instance.visible = galaxy
 	_update_moons()
 
@@ -576,7 +627,7 @@ func _draw_trails():
 			var point: Dictionary = history[j]
 			var p: PackedFloat64Array = point.p
 			var shift = Physics.galactic_offset(point.day) - offset_now
-			var pos = Vector3(p[i*3],p[i*3+1],p[i*3+2]) - origin + shift
+			var pos = (Vector3(p[i*3],p[i*3+1],p[i*3+2])-origin)*_interplanet_scale()+shift
 			mesh.surface_set_color(Color(COLORS[i],lerpf(0.04,0.75,float(j)/history.size())))
 			mesh.surface_add_vertex(pos*SCALE)
 		mesh.surface_set_color(Color(COLORS[i],0.8))
@@ -618,27 +669,31 @@ func _update_camera(delta: float):
 		target = Physics.galactic_offset(-240.0)*SCALE
 	var direction = Vector3(sin(yaw)*cos(pitch),sin(pitch),cos(yaw)*cos(pitch))
 	camera.position = target + direction*distance
-	if overview:
-		camera.near = maxf(0.000001,minf(distance*0.001,0.1))
-		camera.far = maxf(20000.0,distance*2.0+2000.0)
-	else:
-		# Very small moons need a local clipping range; a Solar-System far plane
-		# makes the float32 projection degenerate in the Compatibility renderer.
-		camera.near = maxf(0.000000001,distance*0.005)
-		var scene_extent = distance*4.0
-		for i in range(bodies.size()):
-			scene_extent = maxf(scene_extent,camera.position.distance_to(bodies[i].position)+_radius(i)*3.0)
-		for i in range(moon_nodes.size()):
-			scene_extent = maxf(scene_extent,camera.position.distance_to(moon_nodes[i].position)+_moon_radius(i)*3.0)
-		camera.far = minf(maxf(0.01,scene_extent),camera.near*2000000.0)
+	# Keep a stable projection from physical moon close-ups to compressed overviews.
+	camera.near = maxf(0.000000001,minf(distance*0.001,0.1) if overview else distance*0.005)
+	var scene_extent = maxf(distance*4.0,20000.0 if galaxy else 0.01)
+	for i in range(bodies.size()):
+		scene_extent = maxf(scene_extent,camera.position.distance_to(bodies[i].position)+_radius(i)*3.0)
+	for i in range(moon_nodes.size()):
+		scene_extent = maxf(scene_extent,camera.position.distance_to(moon_nodes[i].position)+_moon_radius(i)*3.0)
+	camera.far = minf(scene_extent,camera.near*2000000.0)
 	# Build from a unit direction: look_at(position) treats sub-1e-5 separations
 	# as coincident, which otherwise breaks physical-scale Phobos/Deimos views.
 	camera.basis = Basis.looking_at(-direction,Vector3.UP)
 
+func _place_label(label: Label3D, anchor: Vector3, radius: float):
+	var depth = maxf(-camera.to_local(anchor).z,0.000000001)
+	var height = maxf(get_viewport().get_visible_rect().size.y,1.0)
+	var units_per_pixel = depth*2.0*tan(deg_to_rad(camera.fov*0.5))/height
+	label.position = anchor+camera.basis.y*(radius+units_per_pixel*12.0)
+	label.scale = Vector3.ONE*units_per_pixel*18.0/(label.font_size*label.pixel_size)
+
 func _update_labels():
 	var used: Array[Rect2] = []
-	for label in labels:
-		label.visible = (overview or galaxy) and labels_enabled and not camera.is_position_behind(label.position)
+	for i in range(labels.size()):
+		var label = labels[i]
+		_place_label(label,bodies[i].position,_radius(i))
+		label.visible = (overview or galaxy) and labels_enabled and camera.is_position_in_frustum(bodies[i].position)
 		if not label.visible:
 			continue
 		var point = camera.unproject_position(label.position)
@@ -651,12 +706,10 @@ func _update_labels():
 			used.append(box)
 	for i in range(moon_labels.size()):
 		var label = moon_labels[i]
-		label.visible = labels_enabled and i!=selected_moon and moon_nodes[i].visible and camera.is_position_in_frustum(label.position)
+		_place_label(label,moon_nodes[i].position,_moon_radius(i))
+		label.visible = labels_enabled and i!=selected_moon and moon_nodes[i].visible and camera.is_position_in_frustum(moon_nodes[i].position)
 		if not label.visible:
 			continue
-		var depth = -camera.to_local(label.position).z
-		var height = maxf(get_viewport().get_visible_rect().size.y,1.0)
-		label.scale = Vector3.ONE*depth*2.0*tan(deg_to_rad(camera.fov*0.5))*18.0/(height*label.font_size*label.pixel_size)
 		var point = camera.unproject_position(label.position)
 		var box = Rect2(point-Vector2(48,10),Vector2(96,20))
 		for occupied in used:
@@ -689,36 +742,43 @@ func _set_overview():
 	satellite_system_view = false
 	_refresh_moon_picker()
 	_sync_scale_controls()
-	target_distance = 2000.0 if galaxy else 1750.0
+	target_distance = 2000.0 if galaxy else (95.0 if view_mode=="inner" else 1750.0)*_interplanet_scale()
 	pitch = 0.42 if galaxy else 0.85
 	yaw = 1.05 if galaxy else 0.3
 	for button in select_buttons:
 		button.button_pressed = false
+	_sync_view_buttons()
 
-func _toggle_galaxy():
-	galaxy = not galaxy
+func _activate_view(mode: String):
+	view_mode = mode
+	galaxy = mode=="galaxy"
 	if galaxy:
 		_seed_history()
 	_set_overview()
 
+func _sync_view_buttons():
+	for mode in view_buttons:
+		var current = mode==view_mode
+		view_buttons[mode].set_pressed_no_signal(current)
+		view_buttons[mode].disabled = current
+
+func _view_button(text_value: String, mode: String) -> Button:
+	var button = _button(text_value,_activate_view.bind(mode))
+	button.toggle_mode = true
+	view_buttons[mode] = button
+	return button
+
+func _toggle_galaxy():
+	_activate_view("galaxy")
+
 func _system_overview():
-	galaxy = false
-	_set_overview()
+	_activate_view("system")
 
 func _inner_overview():
-	galaxy = false
-	_set_overview()
-	target_distance = 95.0
+	_activate_view("inner")
 
 func _toggle_scale():
-	actual_size = not actual_size
-	if not overview:
-		if selected_moon>=0:
-			_select_moon(selected_moon)
-		elif satellite_system_view:
-			_satellite_system()
-		else:
-			_select(selected)
+	_set_scale_mode(not actual_size)
 
 func _reset():
 	var old_radius = _focus_radius()
@@ -740,7 +800,7 @@ func _toggle_pause():
 	pause_button.text = "Ⅱ  Пауза" if playing else "▶  Продолжить"
 
 func _zoom(factor: float):
-	var lower = 8.0 if overview else _focus_radius()*2.0
+	var lower = 8.0*_interplanet_scale() if overview else _focus_radius()*2.0
 	var upper = 3500.0 if overview else maxf(3500.0,_focus_radius()*100.0)
 	if satellite_system_view:
 		upper = maxf(upper,_system_extent()*8.0)
@@ -848,6 +908,8 @@ func _build_ui():
 		theme.set_stylebox("hover",type,hover)
 		theme.set_stylebox("pressed",type,pressed)
 		theme.set_color("font_color",type,Color("c4d6df"))
+	theme.set_stylebox("disabled","Button",pressed)
+	theme.set_color("font_disabled_color","Button",Color("85b4c3"))
 	root.theme = theme
 	var brand = _label("E A R T H N O M A D",23)
 	brand.position = Vector2(32,26)
@@ -862,6 +924,7 @@ func _build_ui():
 	frame_label.position = Vector2(610,35)
 	root.add_child(frame_label)
 	_build_scale_controls(root)
+	root.resized.connect(_layout_scale_panel)
 	var left = _box(root,Vector2(28,112),207)
 	left.add_child(_label("ОБЪЕКТЫ  /  09",12,Color("73929f")))
 	for i in range(9):
@@ -897,9 +960,10 @@ func _build_ui():
 	detail_label = _label("",16)
 	right.add_child(detail_label)
 	right.add_child(HSeparator.new())
-	right.add_child(_button("↗  Галактический полёт",_toggle_galaxy))
-	right.add_child(_button("◎  Обзор системы",_system_overview))
-	right.add_child(_button("⊙  Земная группа",_inner_overview))
+	right.add_child(_view_button("↗  Галактический полёт","galaxy"))
+	right.add_child(_view_button("◎  Обзор системы","system"))
+	right.add_child(_view_button("⊙  Земная группа","inner"))
+	_sync_view_buttons()
 	labels_toggle = CheckButton.new()
 	labels_toggle.text = "Подписи объектов"
 	labels_toggle.custom_minimum_size.y = 44
@@ -907,7 +971,14 @@ func _build_ui():
 	labels_toggle.button_pressed = labels_enabled
 	labels_toggle.toggled.connect(_set_labels_enabled)
 	right.add_child(labels_toggle)
-	var note = _label("Орбиты: ньютоновская гравитация\nГалактика: приближённая модель\nОриентация осей: иллюстративная\nТекстуры: Solar System Scope\nCC BY 4.0 · JPL / NASA",12,Color("73929f"))
+	moons_toggle = CheckButton.new()
+	moons_toggle.text = "Спутники и орбиты"
+	moons_toggle.custom_minimum_size.y = 44
+	moons_toggle.focus_mode = Control.FOCUS_NONE
+	moons_toggle.button_pressed = moons_enabled
+	moons_toggle.toggled.connect(_set_moons_enabled)
+	right.add_child(moons_toggle)
+	var note = _label("Solar System Scope · CC BY 4.0\nJPL / NASA · Модель приближённая",11,Color("73929f"))
 	right.add_child(note)
 	var bottom = PanelContainer.new()
 	root.add_child(bottom)
@@ -981,17 +1052,43 @@ func _scale_row(parent: VBoxContainer, caption: String, value: float, kind: Stri
 func _build_scale_controls(root: Control):
 	var box = _box(root,Vector2(270,522),520)
 	size_panel = box.get_parent()
-	var heading = HBoxContainer.new()
-	box.add_child(heading)
 	scale_heading = _label("",12,Color("7fd0cd"))
 	scale_heading.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	heading.add_child(scale_heading)
-	var reset = _button("Сброс",_reset_visual_scale)
-	reset.custom_minimum_size.y = 32
-	heading.add_child(reset)
-	_scale_row(box,"Планеты",_planet_scale(),"planets")
-	_scale_row(box,"Солнце",_sun_scale(),"sun")
-	_scale_row(box,"Спутники",_moon_scale(),"moons")
+	box.add_child(scale_heading)
+	var modes = HBoxContainer.new()
+	box.add_child(modes)
+	physical_mode_button = _button("1:1",_set_scale_mode.bind(true))
+	physical_mode_button.toggle_mode = true
+	physical_mode_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	modes.add_child(physical_mode_button)
+	adjust_mode_button = _button("Регулировать",_set_scale_mode.bind(false))
+	adjust_mode_button.toggle_mode = true
+	adjust_mode_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	modes.add_child(adjust_mode_button)
+	adjust_controls = VBoxContainer.new()
+	adjust_controls.add_theme_constant_override("separation",8)
+	box.add_child(adjust_controls)
+	_scale_row(adjust_controls,"Планеты",_planet_scale(),"planets")
+	_scale_row(adjust_controls,"Солнце",_sun_scale(),"sun")
+	_scale_row(adjust_controls,"Спутники",_moon_scale(),"moons")
+	distance_controls = HBoxContainer.new()
+	distance_controls.add_theme_constant_override("separation",12)
+	box.add_child(distance_controls)
+	distance_controls.add_child(_label("Сжать расстояния",15))
+	compression_slider = HSlider.new()
+	compression_slider.min_value = 1.0
+	compression_slider.max_value = MAX_DISTANCE_COMPRESSION
+	compression_slider.step = 0.1
+	compression_slider.value = 1.0
+	compression_slider.custom_minimum_size = Vector2(170,44)
+	compression_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	compression_slider.focus_mode = Control.FOCUS_NONE
+	compression_slider.tooltip_text = "Уменьшение межпланетных расстояний от 1 до 50 раз. Радиусы и локальные орбиты спутников не меняются."
+	compression_slider.value_changed.connect(_set_distance_compression)
+	distance_controls.add_child(compression_slider)
+	compression_label = _label("÷ 1.0",15)
+	compression_label.custom_minimum_size.x = 70
+	distance_controls.add_child(compression_label)
 	scale_note = _label("",12,Color("73929f"))
 	box.add_child(scale_note)
 
@@ -1001,7 +1098,7 @@ func _update_readout():
 	frame_label.text = ("ГАЛАКТИЧЕСКИЙ ПОЛЁТ" if galaxy else "ГЕЛИОЦЕНТРИЧЕСКИЙ ВИД") + "   /   " + ("РАЗМЕРЫ 1:1" if actual_size else "РАЗМЕРЫ УВЕЛИЧЕНЫ")
 	if galaxy and not overview:
 		frame_label.text += "   /   СЛЕЖЕНИЕ"
-	scale_note.text = "Режим 1:1. Измените размер, чтобы включить увеличение." if actual_size else "Только изображение · 0.1–50× · Возможны перекрытия"
+	scale_note.text = "Радиусы реальные · Межпланетные расстояния ÷ %.1f" % distance_compression if actual_size else "Радиусы × 0.1–50 · Все расстояния реальные"
 	title_label.text = NAMES[selected]
 	var radius_au = sim.position(selected).distance_to(sim.position(0))
 	var speed = 0.0

@@ -13,7 +13,7 @@ func run():
 	app.playing = false
 	app.pause_button.text = "▶  Продолжить"
 	for physical in [false,true]:
-		app.actual_size = physical
+		app._set_scale_mode(physical)
 		for i in range(app.satellites.data.size()):
 			app._select_moon(i)
 			await process_frame
@@ -22,7 +22,7 @@ func run():
 			if not app.camera.is_position_in_frustum(app.moon_nodes[i].position):
 				push_error("Satellite outside rendering frustum: %s / physical=%s" % [i,physical])
 				failures += 1
-	app.actual_size = false
+	app._set_scale_mode(false)
 	for i in [6,7]:
 		app._select(i)
 		await process_frame
@@ -40,6 +40,22 @@ func run():
 	app.moon_scale_input.value = 50.0
 	await process_frame
 	await RenderingServer.frame_post_draw
+	app.physical_mode_button.pressed.emit()
+	app.compression_slider.value = 50.0
+	app._inner_overview()
+	app._update_camera(1.0)
+	await process_frame
+	await process_frame
+	await RenderingServer.frame_post_draw
+	root.get_texture().get_image().save_png("res://build/physical-mode-v0.7.0.png")
+	app.moons_toggle.button_pressed = false
+	await process_frame
+	await RenderingServer.frame_post_draw
+	if app.moon_nodes.any(func(body): return body.visible) or app.moon_orbits.any(func(orbit): return orbit.visible):
+		push_error("Hidden satellite geometry is still visible")
+		failures += 1
+	app.moons_toggle.button_pressed = true
+	app.adjust_mode_button.pressed.emit()
 	# Verify that the new fill actually reveals a surface facing away from the Sun.
 	app._reset_visual_scale()
 	app._select(4)
@@ -60,13 +76,13 @@ func run():
 		push_error("Night-side fill did not brighten the rendered surface")
 		failures += 1
 	print("Night-side center luminance: ",dark," -> ",filled)
-	filled_image.save_png("res://build/night-side-v0.6.0.png")
+	filled_image.save_png("res://build/night-side-v0.7.0.png")
 	app._select(5)
 	app._satellite_system()
 	await process_frame
 	await RenderingServer.frame_post_draw
-	root.get_texture().get_image().save_png("res://build/dashed-orbits-v0.6.0.png")
-	print("RENDER: ","PASS" if failures==0 else "FAIL", " (satellites; rings; galactic tracking; sizing; night fill; dashed orbits)")
+	root.get_texture().get_image().save_png("res://build/adjust-mode-v0.7.0.png")
+	print("RENDER: ","PASS" if failures==0 else "FAIL", " (real geometry; both scale modes; compression; visibility; navigation; night fill)")
 	app.queue_free()
 	await process_frame
 	DirAccess.remove_absolute("user://test-render.cfg")
