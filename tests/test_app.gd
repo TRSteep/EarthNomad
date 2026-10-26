@@ -21,6 +21,14 @@ func check_view_buttons(expected: String):
 func run():
 	app = load("res://main.tscn").instantiate()
 	app.settings_path = "user://test-display.cfg"
+	# Keep regression defaults independent of the user's editable Visual preset.
+	var default_preset_path = "user://test-default-visual.cfg"
+	var default_preset = ConfigFile.new()
+	for key in ["sun","planets","moons"]:
+		default_preset.set_value("sizes",key,10.0)
+	default_preset.set_value("sizes","compression",1.0)
+	default_preset.save(default_preset_path)
+	app.visual_preset_path = default_preset_path
 	DirAccess.remove_absolute(app.settings_path)
 	var previous_session = ConfigFile.new()
 	previous_session.set_value("galaxy","planet_scale",40.0)
@@ -296,7 +304,7 @@ func run():
 	check(not app.actual_size and app.adjust_controls.visible and app.distance_controls.visible,"Adjust mode shows three size sliders")
 	check(is_equal_approx(app._radius(3),6371.0084*app.KM_TO_SCENE*10.0),"Visual loads the preset radius")
 	for i in range(app.bodies.size()):
-		check(app.bodies[i].position.distance_to(fixed_planets[i]/25.0-(app.satellites.position_km(0,app.sim.epoch_jd)*app.KM_TO_SCENE*0.0121505856*(1.0-1.0/25.0) if i==3 else Vector3.ZERO))<0.00001,"Visual preserves independent distance compression")
+		check(app.bodies[i].position.distance_to(fixed_planets[i])<0.00001,"Visual loads its configured distance compression")
 	app._select_moon(0)
 	var before_hiding = app.sim.p.duplicate()
 	app.moons_toggle.button_pressed = false
@@ -335,6 +343,7 @@ func run():
 	preset.set_value("sizes","sun",12.0)
 	preset.set_value("sizes","planets",24.0)
 	preset.set_value("sizes","moons",36.0)
+	preset.set_value("sizes","compression",50.0)
 	preset.save(preset_path)
 	app.visual_preset_path = preset_path
 	app.visual_mode_button.pressed.emit()
@@ -343,16 +352,16 @@ func run():
 	preset.save(preset_path)
 	app.visual_mode_button.pressed.emit()
 	check(app._planet_scale()==42.0,"Clicking Visual again reloads the edited file")
-	check(app.distance_compression==500.0 and app.sim.elapsed+app.sim.pending==preset_time and app.selected==preset_selected,"Presets preserve compression, time and selection")
+	check(app.distance_compression==50.0 and app.sim.elapsed+app.sim.pending==preset_time and app.selected==preset_selected,"Visual loads compression while preserving time and selection")
 	preset.set_value("sizes","sun",500.0)
 	preset.set_value("sizes","planets",0.1)
 	preset.set_value("sizes","moons","invalid")
 	preset.save(preset_path)
 	app.visual_mode_button.pressed.emit()
 	check(app._sun_scale()==50.0 and app._planet_scale()==1.0 and app._moon_scale()==10.0,"Preset values are bounded and invalid values use defaults")
-	app.visual_preset_path = ""
+	app.visual_preset_path = default_preset_path
 	app.visual_mode_button.pressed.emit()
-	check(app._sun_scale()==10.0 and app._planet_scale()==10.0 and app._moon_scale()==10.0,"Shipped Visual preset sets ten for all bodies")
+	check(app._sun_scale()==10.0 and app._planet_scale()==10.0 and app._moon_scale()==10.0,"Visual restores all fixture radii")
 	for pair in [[app.sun_scale_input,50.0],[app.planet_scale_input,500.0],[app.moon_scale_input,500.0]]:
 		pair[0].value = pair[1]
 		check(pair[0].value==pair[1] and pair[0].min_value==1.0,"Distinct radius input range")
@@ -360,7 +369,22 @@ func run():
 		check(is_equal_approx(pow(2.0,pair[0].max_value),pair[1]) and pair[0].min_value==0.0,"Distinct radius slider range")
 	app.compression_slider.value = 999.0
 	check(app.distance_compression==500.0,"Distance compression has a 500x limit")
+	preset.set_value("sizes","compression",9999.0)
+	preset.save(preset_path)
+	app.visual_preset_path = preset_path
+	app.visual_mode_button.pressed.emit()
+	check(app.distance_compression==500.0,"Configured compression is bounded at 500")
+	preset.set_value("sizes","compression","invalid")
+	preset.save(preset_path)
+	app.visual_mode_button.pressed.emit()
+	check(app.distance_compression==50.0,"Invalid configured compression falls back to 50")
+	preset.set_value("sizes","compression",50.0)
+	preset.save(preset_path)
+	app._load_display_settings()
+	check(app.distance_compression==50.0,"Startup reads compression from the preset")
+	app.visual_preset_path = default_preset_path
 	DirAccess.remove_absolute(preset_path)
+	DirAccess.remove_absolute(default_preset_path)
 	print("APP: ", "PASS" if failures==0 else "FAIL")
 	app.queue_free()
 	await process_frame

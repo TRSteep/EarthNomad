@@ -57,6 +57,13 @@ func check_geometry(physical: bool, compression: float, factor: float):
 func run():
 	app = load("res://main.tscn").instantiate()
 	app.settings_path = "user://test-geometry.cfg"
+	var fixture_path = "user://test-geometry-visual.cfg"
+	var fixture = ConfigFile.new()
+	for key in ["sun","planets","moons"]:
+		fixture.set_value("sizes",key,10.0)
+	fixture.set_value("sizes","compression",1.0)
+	fixture.save(fixture_path)
+	app.visual_preset_path = fixture_path
 	DirAccess.remove_absolute(app.settings_path)
 	root.add_child(app)
 	app.playing = false
@@ -170,4 +177,5 @@ func run():
 	app.queue_free()
 	await process_frame
 	DirAccess.remove_absolute("user://test-geometry.cfg")
+	DirAccess.remove_absolute(fixture_path)
 	quit(failures)

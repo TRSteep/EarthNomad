@@ -19,6 +19,7 @@ const SUN_SCALE_MAX = 50.0
 const DEFAULT_PLANET_SCALE = 10.0
 const DEFAULT_SUN_SCALE = 10.0
 const DEFAULT_MOON_SCALE = 10.0
+const DEFAULT_DISTANCE_COMPRESSION = 50.0
 const DISPLAY_SETTINGS_VERSION = 7
 const MOON_ORBIT_DASHES = 96
 const MOON_TRAIL_PERIODS = 4.0
@@ -468,7 +469,8 @@ func _read_visual_preset() -> Dictionary:
 	return {
 		"planets":_validated_scale(config.get_value("sizes","planets",DEFAULT_PLANET_SCALE),DEFAULT_PLANET_SCALE),
 		"sun":_validated_scale(config.get_value("sizes","sun",DEFAULT_SUN_SCALE),DEFAULT_SUN_SCALE,SUN_SCALE_MAX),
-		"moons":_validated_scale(config.get_value("sizes","moons",DEFAULT_MOON_SCALE),DEFAULT_MOON_SCALE)
+		"moons":_validated_scale(config.get_value("sizes","moons",DEFAULT_MOON_SCALE),DEFAULT_MOON_SCALE),
+		"compression":_validated_scale(config.get_value("sizes","compression",DEFAULT_DISTANCE_COMPRESSION),DEFAULT_DISTANCE_COMPRESSION,MAX_DISTANCE_COMPRESSION)
 	}
 
 func _restore_default_sizes():
@@ -480,7 +482,7 @@ func _restore_default_sizes():
 	helio_sun_scale = preset.sun
 	helio_moon_scale = preset.moons
 	actual_size = preset.planets==1.0 and preset.sun==1.0 and preset.moons==1.0
-	distance_compression = 1.0
+	distance_compression = preset.compression
 
 func _save_display_settings():
 	var settings = ConfigFile.new()
@@ -554,6 +556,10 @@ func _sync_scale_controls():
 
 func _set_scale_mode(physical: bool):
 	var preset = {"planets":1.0,"sun":1.0,"moons":1.0} if physical else _read_visual_preset()
+	if not physical:
+		var previous_scale = _interplanet_scale()
+		distance_compression = preset.compression
+		_rescale_flight_overview(previous_scale)
 	if galaxy:
 		galaxy_planet_scale = preset.planets
 		galaxy_sun_scale = preset.sun
