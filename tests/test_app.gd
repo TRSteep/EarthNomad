@@ -73,9 +73,9 @@ func run():
 	app._set_visual_scale(-10.0,false)
 	check(app.galaxy_planet_scale==app.VISUAL_SCALE_MIN,"Lower scale bound")
 	app._set_visual_scale(10000.0,false)
-	check(app.galaxy_planet_scale==50.0,"Planet maximum is 50x")
+	check(app.galaxy_planet_scale==150.0,"Planet maximum is 150x")
 	app._set_visual_scale(1000.0,true)
-	check(app.galaxy_sun_scale==50.0,"Sun maximum is 50x")
+	check(app.galaxy_sun_scale==150.0,"Sun maximum is 150x")
 	app._select(0)
 	app._zoom(0.9)
 	check(app.target_distance>=app._radius(0)*2.0,"Zoom bounds scale with giant Sun")
@@ -234,7 +234,7 @@ func run():
 	app._load_display_settings()
 	check_default_sizes("Reload resets satellite sizes in both views")
 	app._set_moon_scale(500.0)
-	check(app.helio_moon_scale==50.0,"Satellite size respects the 50x limit")
+	check(app.helio_moon_scale==150.0,"Satellite size respects the 150x limit")
 	app._toggle_scale()
 	check(is_equal_approx(app._moon_radius(0),1737.4/149597870.7*20.0),"Physical satellite size ignores exaggeration")
 	app._reset_visual_scale()
@@ -319,6 +319,27 @@ func run():
 		check_view_buttons(mode)
 		app._set_overview()
 		check_view_buttons(mode)
+	# The visible Reset is a size action; time, selection and the other view stay intact.
+	app._activate_view("galaxy")
+	app._set_visual_scale(150.0,false)
+	app._set_visual_scale(150.0,true)
+	app._set_moon_scale(150.0)
+	app._set_scale_mode(true)
+	app._set_distance_compression(50.0)
+	var reset_time: float = app.sim.elapsed+app.sim.pending
+	var reset_selected: int = app.selected
+	var other_sizes = [app.helio_planet_scale,app.helio_sun_scale,app.helio_moon_scale]
+	app.reset_size_button.pressed.emit()
+	check(app.adjust_mode_button.text=="Size" and app.reset_size_button.text=="Reset","Size panel uses requested captions")
+	check(not app.actual_size and app.galaxy_planet_scale==3.0 and app.galaxy_sun_scale==2.0 and app.galaxy_moon_scale==4.0,"Reset button restores Size and 3x/2x/4x")
+	check(app.sim.elapsed+app.sim.pending==reset_time and app.selected==reset_selected,"Size reset preserves time and selection")
+	check([app.helio_planet_scale,app.helio_sun_scale,app.helio_moon_scale]==other_sizes,"Size reset affects only the current view")
+	check(is_equal_approx(app.target_distance,2000.0),"Size reset restores uncompressed flight framing")
+	for control in [app.planet_scale_input,app.sun_scale_input,app.moon_scale_input]:
+		control.value = 150.0
+		check(control.value==150.0,"Size input accepts 150x")
+	for control in [app.planet_scale_slider,app.sun_scale_slider,app.moon_scale_slider]:
+		check(is_equal_approx(pow(2.0,control.max_value),150.0),"Size slider reaches 150x")
 	print("APP: ", "PASS" if failures==0 else "FAIL")
 	app.queue_free()
 	await process_frame

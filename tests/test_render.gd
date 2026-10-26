@@ -131,6 +131,17 @@ func run():
 	if nav_bottom>root.get_visible_rect().size.y-112.0:
 		push_error("Navigation overlaps the time controls")
 		failures += 1
+	app.planet_scale_input.value = 150.0
+	app.sun_scale_input.value = 150.0
+	app.moon_scale_input.value = 150.0
+	app._satellite_system()
+	await process_frame
+	await RenderingServer.frame_post_draw
+	app.reset_size_button.pressed.emit()
+	app._select(3)
+	await process_frame
+	await RenderingServer.frame_post_draw
+	root.get_texture().get_image().save_png("res://build/size-reset-v0.8.1.png")
 	print("RENDER: ","PASS" if failures==0 else "FAIL", " (real geometry; compressed flight; satellite orbits/trails; GPU endpoints; UI layout; night fill)")
 	app.queue_free()
 	await process_frame

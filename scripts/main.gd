@@ -14,7 +14,7 @@ const SCALE = 20.0
 const KM_TO_SCENE = SCALE/Physics.AU_KM
 const MAX_DISTANCE_COMPRESSION = 50.0
 const VISUAL_SCALE_MIN = 0.1
-const VISUAL_SCALE_MAX = 50.0
+const VISUAL_SCALE_MAX = 150.0
 const DEFAULT_PLANET_SCALE = 3.0
 const DEFAULT_SUN_SCALE = 2.0
 const DEFAULT_MOON_SCALE = 4.0
@@ -101,6 +101,7 @@ var moons_toggle: CheckButton
 var moon_path_buttons: Dictionary = {}
 var physical_mode_button: Button
 var adjust_mode_button: Button
+var reset_size_button: Button
 var adjust_controls: VBoxContainer
 var distance_controls: HBoxContainer
 var compression_slider: HSlider
@@ -522,9 +523,18 @@ func _set_size_control(value: float, kind: String):
 		_set_visual_scale(value,kind=="sun")
 
 func _reset_visual_scale():
-	_set_visual_scale(DEFAULT_PLANET_SCALE,false)
-	_set_visual_scale(DEFAULT_SUN_SCALE,true)
-	_set_moon_scale(DEFAULT_MOON_SCALE)
+	if galaxy:
+		galaxy_planet_scale = DEFAULT_PLANET_SCALE
+		galaxy_sun_scale = DEFAULT_SUN_SCALE
+		galaxy_moon_scale = DEFAULT_MOON_SCALE
+	else:
+		helio_planet_scale = DEFAULT_PLANET_SCALE
+		helio_sun_scale = DEFAULT_SUN_SCALE
+		helio_moon_scale = DEFAULT_MOON_SCALE
+	# Switch through the mode handler so a compressed flight overview keeps
+	# its framing when Reset returns to the uncompressed Size mode.
+	_set_scale_mode(false)
+	settings_timer.start()
 
 func _sync_scale_controls():
 	planet_scale_slider.set_value_no_signal(log(_planet_scale())/log(2.0))
@@ -1168,7 +1178,7 @@ func _scale_row(parent: VBoxContainer, caption: String, value: float, kind: Stri
 	slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	slider.custom_minimum_size = Vector2(100,44)
 	slider.focus_mode = Control.FOCUS_NONE
-	slider.tooltip_text = "Множитель реального радиуса от 0.1× до 50×. Например, радиус Земли при ×4 — 25 484 км. Орбиты не меняются."
+	slider.tooltip_text = "Множитель реального радиуса от 0.1× до 150×. Например, радиус Земли при ×4 — 25 484 км. Орбиты не меняются."
 	slider.value_changed.connect(func(exponent): _set_size_control(snappedf(pow(2.0,exponent),0.1),kind))
 	row.add_child(slider)
 	var input = SpinBox.new()
@@ -1202,10 +1212,14 @@ func _build_scale_controls(root: Control):
 	physical_mode_button.toggle_mode = true
 	physical_mode_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	modes.add_child(physical_mode_button)
-	adjust_mode_button = _button("Регулировать",_set_scale_mode.bind(false))
+	adjust_mode_button = _button("Size",_set_scale_mode.bind(false))
 	adjust_mode_button.toggle_mode = true
 	adjust_mode_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	modes.add_child(adjust_mode_button)
+	reset_size_button = _button("Reset",_reset_visual_scale)
+	reset_size_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	reset_size_button.tooltip_text = "Размеры текущего вида: планеты ×3, Солнце ×2, спутники ×4; режим Size."
+	modes.add_child(reset_size_button)
 	adjust_controls = VBoxContainer.new()
 	adjust_controls.add_theme_constant_override("separation",8)
 	box.add_child(adjust_controls)

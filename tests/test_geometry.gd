@@ -69,7 +69,7 @@ func run():
 			var km = Vector3(position[0],position[1],position[2]).length()*AU_KM
 			check(abs(km/(PLANET_RANGES[i][endpoint]*1000000.0)-1.0)<0.015,"Planetary ellipse has the reference physical extent")
 	for physical in [false,true]:
-		for factor in [1.0,4.0,5.0,50.0]:
+		for factor in ([1.0,4.0,5.0,50.0] if physical else [1.0,4.0,5.0,50.0,150.0]):
 			check_geometry(physical,factor if physical else 1.0,factor)
 	app._set_scale_mode(true)
 	app._set_distance_compression(1.0)
@@ -95,7 +95,7 @@ func run():
 		for item in app.history:
 			samples.append(app._trajectory_point(i,item.day,app._relative_sample_position(i,item.p)))
 	app._set_scale_mode(false)
-	for factor in [4.0,5.0,50.0]:
+	for factor in [4.0,5.0,50.0,150.0]:
 		app._set_visual_scale(factor,false)
 		var sample = 0
 		for i in range(9):
