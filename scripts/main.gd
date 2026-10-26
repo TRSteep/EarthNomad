@@ -2,6 +2,7 @@ extends Node3D
 
 const Physics = preload("res://scripts/physics.gd")
 const Satellites = preload("res://scripts/satellites.gd")
+const GalacticOrbit = preload("res://scripts/galactic_orbit.gd")
 const IDS = ["sun", "mercury", "venus", "earth", "mars", "jupiter", "saturn", "uranus", "neptune"]
 const NAMES = ["Солнце", "Меркурий", "Венера", "Земля", "Марс", "Юпитер", "Сатурн", "Уран", "Нептун"]
 const KINDS = ["ЗВЕЗДА · G2V", "КАМЕННАЯ ПЛАНЕТА", "КАМЕННАЯ ПЛАНЕТА", "НАШ ДОМ", "КАМЕННАЯ ПЛАНЕТА", "ГАЗОВЫЙ ГИГАНТ", "ГАЗОВЫЙ ГИГАНТ", "ЛЕДЯНОЙ ГИГАНТ", "ЛЕДЯНОЙ ГИГАНТ"]
@@ -51,6 +52,12 @@ var history: Array = []
 var last_sample = 0.0
 var trail_clock = 0.0
 var camera = Camera3D.new()
+var galactic_orbit = GalacticOrbit.new()
+var galactic_map = false
+var flight_camera: Dictionary = {}
+var galactic_map_button: Button
+var galactic_legend: Label
+var galactic_caption: Label
 var selected = 3
 var overview = false
 var galaxy = false
@@ -124,6 +131,7 @@ func _ready():
 	_build_orbits()
 	add_child(trail_instance)
 	add_child(moon_trail_instance)
+	add_child(galactic_orbit)
 	_build_ui()
 	_select(3)
 	for argument in startup_args:
@@ -137,6 +145,9 @@ func _ready():
 		_set_overview()
 	if "--galaxy" in startup_args:
 		_activate_view("galaxy")
+	if "--galactic-orbit" in startup_args:
+		_activate_view("galaxy")
+		_set_galactic_map(true)
 	if "--inner" in startup_args:
 		_activate_view("inner")
 	if "--physical" in startup_args:
@@ -347,6 +358,8 @@ func _refresh_moon_picker():
 		moon_picker.select(moon_picker.get_item_index(selected_moon))
 
 func _select_moon(index: int):
+	if galactic_map:
+		_set_galactic_map(false)
 	if not moons_enabled:
 		_set_moons_enabled(true)
 	selected = int(satellites.data[index].parent)
@@ -366,6 +379,8 @@ func _select_moon(index: int):
 		select_buttons[i].button_pressed = i==selected
 
 func _satellite_system():
+	if galactic_map:
+		_set_galactic_map(false)
 	if satellites.indices(selected).is_empty():
 		return
 	if not moons_enabled:
@@ -552,6 +567,7 @@ func _sync_scale_controls():
 	distance_controls.visible = true
 	compression_slider.set_value_no_signal(distance_compression)
 	compression_label.text = "÷ %.1f" % distance_compression
+	size_panel.visible = not galactic_map
 	_layout_scale_panel.call_deferred()
 
 func _set_scale_mode(physical: bool):
@@ -584,8 +600,12 @@ func _set_distance_compression(value: float):
 func _rescale_flight_overview(previous_scale: float):
 	if galaxy and overview:
 		var ratio = _interplanet_scale()/previous_scale
-		distance *= ratio
-		target_distance *= ratio
+		if galactic_map:
+			flight_camera.distance *= ratio
+			flight_camera.target_distance *= ratio
+		else:
+			distance *= ratio
+			target_distance *= ratio
 
 func _layout_scale_panel():
 	if not is_instance_valid(size_panel):
@@ -805,6 +825,19 @@ func _process(delta: float):
 			get_tree().quit()
 
 func _update_camera(delta: float):
+	galactic_orbit.local_arc.visible = galaxy and not galactic_map
+	galactic_orbit.map_root.visible = galactic_map
+	if galactic_map:
+		distance = lerpf(distance,target_distance,1.0-exp(-delta*8.0))
+		var map_direction = Vector3(sin(yaw)*cos(pitch),sin(pitch),cos(yaw)*cos(pitch))
+		camera.position = map_direction*distance
+		camera.basis = Basis.looking_at(-map_direction,Vector3.UP)
+		camera.cull_mask = GalacticOrbit.MAP_LAYER
+		camera.near = 0.1
+		camera.far = 2000.0
+		galactic_orbit.update_map(sim.elapsed+sim.pending,labels_enabled)
+		return
+	camera.cull_mask = 1
 	distance = lerpf(distance,target_distance,1.0-exp(-delta*8.0))
 	if overview:
 		# Independent large radii and distance compression can put an overview
@@ -832,6 +865,8 @@ func _update_camera(delta: float):
 	# Build from a unit direction: look_at(position) treats sub-1e-5 separations
 	# as coincident, which otherwise breaks physical-scale Phobos/Deimos views.
 	camera.basis = Basis.looking_at(-direction,Vector3.UP)
+	if galaxy:
+		galactic_orbit.update_local(bodies[0].position,sim.elapsed+sim.pending,SCALE*_interplanet_scale(),maxf(distance*4.0,1.0))
 
 func _place_label(label: Label3D, anchor: Vector3, radius: float):
 	var depth = maxf(-camera.to_local(anchor).z,0.000000001)
@@ -872,6 +907,8 @@ func _update_labels():
 			used.append(box)
 
 func _select(index: int):
+	if galactic_map:
+		_set_galactic_map(false)
 	selected = index
 	selected_moon = -1
 	satellite_system_view = false
@@ -889,6 +926,9 @@ func _select(index: int):
 		select_buttons[i].button_pressed = i == index
 
 func _set_overview():
+	if galactic_map:
+		_fit_galactic_map()
+		return
 	overview = true
 	selected_moon = -1
 	satellite_system_view = false
@@ -902,6 +942,8 @@ func _set_overview():
 	_sync_view_buttons()
 
 func _activate_view(mode: String):
+	if galactic_map:
+		_set_galactic_map(false)
 	view_mode = mode
 	galaxy = mode=="galaxy"
 	if galaxy or moon_path_mode=="trails":
@@ -922,6 +964,36 @@ func _view_button(text_value: String, mode: String) -> Button:
 
 func _toggle_galaxy():
 	_activate_view("galaxy")
+
+func _toggle_galactic_map():
+	_set_galactic_map(not galactic_map)
+
+func _fit_galactic_map():
+	distance = 280.0
+	target_distance = 280.0
+	yaw = 0.25
+	pitch = 0.55
+
+func _set_galactic_map(enabled: bool):
+	if enabled==galactic_map or (enabled and not galaxy):
+		return
+	if enabled:
+		flight_camera = {"distance":distance,"target_distance":target_distance,"yaw":yaw,"pitch":pitch}
+		galactic_map = true
+		_fit_galactic_map()
+	else:
+		galactic_map = false
+		distance = flight_camera.distance
+		target_distance = flight_camera.target_distance
+		yaw = flight_camera.yaw
+		pitch = flight_camera.pitch
+	galactic_map_button.set_pressed_no_signal(galactic_map)
+	galactic_map_button.text = "К Солнечной системе" if galactic_map else "Орбита Солнца"
+	galactic_caption.visible = galactic_map
+	size_panel.visible = not galactic_map
+	_update_bodies()
+	_update_camera(0.0)
+	_update_readout()
 
 func _system_overview():
 	_activate_view("system")
@@ -956,6 +1028,9 @@ func _toggle_pause():
 	pause_button.text = "Ⅱ  Пауза" if playing else "▶  Продолжить"
 
 func _zoom(factor: float):
+	if galactic_map:
+		target_distance = clampf(target_distance*factor,100.0,700.0)
+		return
 	var lower = 8.0*_interplanet_scale() if overview else _focus_radius()*2.0
 	var upper = 3500.0 if overview else maxf(3500.0,_focus_radius()*100.0)
 	if satellite_system_view:
@@ -1079,6 +1154,18 @@ func _build_ui():
 	frame_label = _label("",14,Color("7fd0cd"))
 	frame_label.position = Vector2(610,35)
 	root.add_child(frame_label)
+	galactic_map_button = _button("Орбита Солнца",_toggle_galactic_map)
+	galactic_map_button.position = Vector2(610,62)
+	galactic_map_button.custom_minimum_size.x = 220
+	galactic_map_button.toggle_mode = true
+	root.add_child(galactic_map_button)
+	galactic_legend = _label("━ Орбита Солнца",13,GalacticOrbit.ORBIT_COLOR)
+	galactic_legend.position = Vector2(846,76)
+	root.add_child(galactic_legend)
+	galactic_caption = _label("Галактический масштаб · Маркеры условные\nФиолетовая — орбита Солнца · ≈26 000 св. лет · ≈230 млн лет",14,Color("a9bfd0"))
+	galactic_caption.position = Vector2(320,702)
+	galactic_caption.visible = false
+	root.add_child(galactic_caption)
 	_build_scale_controls(root)
 	root.resized.connect(_layout_scale_panel)
 	var left = _box(root,Vector2(28,112),207)
@@ -1263,6 +1350,13 @@ func _build_scale_controls(root: Control):
 func _update_readout():
 	var date = Time.get_datetime_dict_from_unix_time((sim.epoch_jd-2440587.5+sim.elapsed+sim.pending)*86400.0)
 	clock_label.text = "%02d.%02d.%04d  ·  %02d:%02d" % [date.day,date.month,date.year,date.hour,date.minute]
+	galactic_map_button.visible = galaxy
+	galactic_legend.visible = galaxy
+	if galactic_map:
+		frame_label.text = "ОРБИТА СОЛНЦА / МЛЕЧНЫЙ ПУТЬ"
+		title_label.text = "Орбита Солнца"
+		detail_label.text = "ГАЛАКТИЧЕСКИЙ ОБЗОР\n\nРадиус       ≈26 000 св. лет\nПериод      ≈230 млн лет\nСкорость    ≈213 км/с\n\nКруговое приближение\nМаркеры условные"
+		return
 	frame_label.text = ("ГАЛАКТИЧЕСКИЙ ПОЛЁТ" if galaxy else "ГЕЛИОЦЕНТРИЧЕСКИЙ ВИД") + "   /   " + ("РАДИУСЫ 1:1" if actual_size else "VISUAL")
 	if galaxy and not overview:
 		frame_label.text += "   /   СЛЕЖЕНИЕ"

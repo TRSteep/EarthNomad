@@ -153,7 +153,38 @@ func run():
 	await process_frame
 	await RenderingServer.frame_post_draw
 	root.get_texture().get_image().save_png("res://build/visual-controls-v0.9.0.png")
-	print("RENDER: ","PASS" if failures==0 else "FAIL", " (real geometry; compressed flight; satellite orbits/trails; GPU endpoints; UI layout; night fill)")
+	app._activate_view("galaxy")
+	app._select(0)
+	app.distance = 240.0*app._interplanet_scale()
+	app.target_distance = app.distance
+	await process_frame
+	await RenderingServer.frame_post_draw
+	root.get_texture().get_image().save_png("res://build/solar-orbit-flight.png")
+	app.galactic_map_button.pressed.emit()
+	await process_frame
+	await RenderingServer.frame_post_draw
+	var map_image: Image = root.get_texture().get_image()
+	map_image.save_png("res://build/solar-galactic-orbit.png")
+	var violet_pixels = 0
+	for y in range(180,680):
+		for x in range(300,1100):
+			var pixel = map_image.get_pixel(x,y)
+			if pixel.r>0.3 and pixel.b>0.4 and pixel.b>pixel.g*1.3 and pixel.r>pixel.g*1.2:
+				violet_pixels += 1
+	if violet_pixels<250:
+		push_error("Highlighted complete solar orbit is not visible in the GPU frame")
+		failures += 1
+	var orbit_vertices = app.galactic_orbit.map_orbit.mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
+	if orbit_vertices.size()!=513 or orbit_vertices[0].distance_to(orbit_vertices[-1])>0.0001:
+		push_error("GPU solar orbit is not a closed curve")
+		failures += 1
+	app.galactic_map_button.pressed.emit()
+	await process_frame
+	await RenderingServer.frame_post_draw
+	if app.camera.cull_mask!=1 or not app.galactic_orbit.local_arc.visible:
+		push_error("Return from the orbit map fails to restore the flight scene")
+		failures += 1
+	print("RENDER: ","PASS" if failures==0 else "FAIL", " (real geometry; compressed flight; satellite paths; GPU endpoints; solar galactic orbit; UI layout; night fill)")
 	app.queue_free()
 	await process_frame
 	DirAccess.remove_absolute("user://test-render.cfg")

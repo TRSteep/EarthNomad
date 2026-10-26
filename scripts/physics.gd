@@ -3,6 +3,9 @@ extends RefCounted
 ## Vector3 is deliberately restricted to the final rendering boundary.
 const G = 0.0002959122082855911
 const AU_KM = 149597870.7
+const GALACTIC_RADIUS_LY = 26000.0
+const GALACTIC_RADIUS_AU = GALACTIC_RADIUS_LY * 63241.077
+const GALACTIC_PERIOD_DAYS = 230e6 * 365.25
 const STEP = 0.25
 const MASSES = [1.0, 1.660120e-7, 2.4478383e-6, 3.0404326e-6, 3.227151e-7, 9.547919e-4, 2.858856e-4, 4.366244e-5, 5.151389e-5]
 var p = PackedFloat64Array()
@@ -121,9 +124,14 @@ func energy() -> float:
 static func galactic_offset(days: float) -> Vector3:
 	# Idealized circular galactic orbit, not a measured Solar ephemeris.
 	# 26,000 ly; period 230 Myr. Stable half-angle form avoids cancellation.
-	var radius_au = 26000.0 * 63241.077
-	var angle = TAU * days / (230e6 * 365.25)
-	var along = radius_au * sin(angle)
-	var inward = -2.0 * radius_au * pow(sin(angle * 0.5), 2)
+	return galactic_arc_delta(TAU*days/GALACTIC_PERIOD_DAYS)
+
+static func galactic_arc_delta(angle: float, phase: float = 0.0) -> Vector3:
+	# A local chord starting at phase, computed without subtracting two ~1e9 AU
+	# positions. This preserves the small visible arc on a planetary-scale view.
+	var radial = -2.0*pow(sin(angle*0.5),2)
+	var tangent = sin(angle)
+	var inward = GALACTIC_RADIUS_AU*(cos(phase)*radial-sin(phase)*tangent)
+	var along = GALACTIC_RADIUS_AU*(sin(phase)*radial+cos(phase)*tangent)
 	# Illustrative orientation: velocity 60 degrees above the ecliptic.
 	return Vector3(inward, along * sin(PI/3.0), along * cos(PI/3.0))
