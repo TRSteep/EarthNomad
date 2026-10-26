@@ -15,7 +15,8 @@ const VISUAL_SCALE_MIN = 0.1
 const VISUAL_SCALE_MAX = 50.0
 const DEFAULT_PLANET_SCALE = 4.0
 const DEFAULT_SUN_SCALE = 2.0
-const DISPLAY_SETTINGS_VERSION = 2
+const DEFAULT_MOON_SCALE = 4.0
+const DISPLAY_SETTINGS_VERSION = 3
 const SETTINGS_PATH = "user://display.cfg"
 const SPEEDS = [0.000011574074,0.0416667,1.0,10.0,40.0,120.0]
 const SPEED_LABELS = ["Реальное время", "1 час / сек", "1 день / сек", "10 дней / сек", "40 дней / сек", "120 дней / сек"]
@@ -47,8 +48,10 @@ var galaxy = false
 var actual_size = false
 var galaxy_planet_scale = DEFAULT_PLANET_SCALE
 var galaxy_sun_scale = DEFAULT_SUN_SCALE
+var galaxy_moon_scale = DEFAULT_MOON_SCALE
 var helio_planet_scale = DEFAULT_PLANET_SCALE
 var helio_sun_scale = DEFAULT_SUN_SCALE
+var helio_moon_scale = DEFAULT_MOON_SCALE
 var labels_enabled = true
 var playing = true
 var speed_index = 1
@@ -72,8 +75,10 @@ var texture_cache: Dictionary = {}
 var size_panel: PanelContainer
 var planet_scale_slider: HSlider
 var sun_scale_slider: HSlider
+var moon_scale_slider: HSlider
 var planet_scale_input: SpinBox
 var sun_scale_input: SpinBox
+var moon_scale_input: SpinBox
 var scale_note: Label
 var settings_timer: Timer
 var settings_path = SETTINGS_PATH
@@ -110,6 +115,9 @@ func _ready():
 		galaxy = true
 		_set_overview()
 		_seed_history()
+	for argument in startup_args:
+		if argument.begins_with("--follow="):
+			_select(clampi(int(argument.get_slice("=",1)),0,8))
 	_update_bodies()
 	_update_camera(1.0)
 	if "--capture" in startup_args:
@@ -283,7 +291,10 @@ func _build_moons():
 
 func _moon_radius(index: int) -> float:
 	var d: Dictionary = satellites.data[index]
-	return _radius(int(d.parent))*d.radius_km/RADII[int(d.parent)]
+	if actual_size:
+		return d.radius_km/Physics.AU_KM*SCALE
+	# An independent visual size; changing it never moves a satellite's orbit.
+	return DISPLAY_RADII[int(d.parent)]*d.radius_km/RADII[int(d.parent)]*_moon_scale()
 
 func _focus_radius() -> float:
 	return _moon_radius(selected_moon) if selected_moon>=0 else _radius(selected)
@@ -292,7 +303,7 @@ func _system_extent() -> float:
 	var extent = _radius(selected)*2.5
 	for i in satellites.indices(selected):
 		var d: Dictionary = satellites.data[i]
-		extent = maxf(extent,d.a_km*(1.0+d.e)/RADII[selected]*_radius(selected))
+		extent = maxf(extent,d.a_km*(1.0+d.e)/RADII[selected]*_radius(selected)+_moon_radius(i))
 	return extent
 
 func _refresh_moon_picker():
@@ -312,11 +323,13 @@ func _select_moon(index: int):
 	overview = false
 	_sync_scale_controls()
 	_refresh_moon_picker()
-	distance = _focus_radius()*4.5
-	target_distance = distance
-	var p = sim.relative_position(selected,0)
-	yaw = atan2(-p.x,-p.z)+0.55
-	pitch = 0.22
+	if not galaxy:
+		distance = _focus_radius()*4.5
+		target_distance = distance
+		var p = sim.relative_position(selected,0)
+		yaw = atan2(-p.x,-p.z)+0.55
+		pitch = 0.22
+	_ensure_follow_clearance()
 	for i in range(select_buttons.size()):
 		select_buttons[i].button_pressed = i==selected
 
@@ -335,17 +348,15 @@ func _update_moons():
 	var jd = sim.epoch_jd+sim.elapsed+sim.pending
 	# The planetary integrator contains Earth+Moon mass once, at their barycenter.
 	# Split their local display positions; do not add lunar mass to the integrator again.
-	if selected==3 and not overview:
-		var relative = satellites.position_km(0,jd)/RADII[3]*_radius(3)
-		bodies[3].position -= relative*0.0121505856
+	var earth_moon = satellites.position_km(0,jd)/RADII[3]*_radius(3)
+	bodies[3].position -= earth_moon*0.0121505856
 	for i in range(moon_nodes.size()):
 		var d: Dictionary = satellites.data[i]
 		var parent = int(d.parent)
 		var units = _radius(parent)/RADII[parent]
 		var relative = satellites.position_km(i,jd)*units
-		var visible = not overview and parent==selected
-		moon_nodes[i].visible = visible
-		moon_orbits[i].visible = visible and satellite_system_view
+		moon_nodes[i].visible = true
+		moon_orbits[i].visible = satellite_system_view and parent==selected
 		moon_orbits[i].position = bodies[parent].position
 		moon_orbits[i].scale = Vector3.ONE*_radius(parent)
 		moon_nodes[i].position = bodies[parent].position+relative
@@ -393,6 +404,9 @@ func _planet_scale() -> float:
 func _sun_scale() -> float:
 	return galaxy_sun_scale if galaxy else helio_sun_scale
 
+func _moon_scale() -> float:
+	return galaxy_moon_scale if galaxy else helio_moon_scale
+
 func _validated_scale(value: Variant, fallback: float) -> float:
 	if not (value is float or value is int):
 		return fallback
@@ -404,12 +418,14 @@ func _load_display_settings():
 	if settings.load(settings_path) == OK:
 		galaxy_planet_scale = _validated_scale(settings.get_value("galaxy","planet_scale",DEFAULT_PLANET_SCALE),DEFAULT_PLANET_SCALE)
 		galaxy_sun_scale = _validated_scale(settings.get_value("galaxy","sun_scale",DEFAULT_SUN_SCALE),DEFAULT_SUN_SCALE)
+		galaxy_moon_scale = _validated_scale(settings.get_value("galaxy","moon_scale",DEFAULT_MOON_SCALE),DEFAULT_MOON_SCALE)
 		# Upgrade the old 20x/1x defaults while preserving individually chosen sizes.
-		if int(settings.get_value("display","schema",1)) < DISPLAY_SETTINGS_VERSION and galaxy_planet_scale == 20.0 and galaxy_sun_scale == 1.0:
+		if int(settings.get_value("display","schema",1)) < 2 and galaxy_planet_scale == 20.0 and galaxy_sun_scale == 1.0:
 			galaxy_planet_scale = DEFAULT_PLANET_SCALE
 			galaxy_sun_scale = DEFAULT_SUN_SCALE
 		helio_planet_scale = _validated_scale(settings.get_value("heliocentric","planet_scale",DEFAULT_PLANET_SCALE),DEFAULT_PLANET_SCALE)
 		helio_sun_scale = _validated_scale(settings.get_value("heliocentric","sun_scale",DEFAULT_SUN_SCALE),DEFAULT_SUN_SCALE)
+		helio_moon_scale = _validated_scale(settings.get_value("heliocentric","moon_scale",DEFAULT_MOON_SCALE),DEFAULT_MOON_SCALE)
 		var saved_labels = settings.get_value("display","labels_enabled",true)
 		labels_enabled = saved_labels if saved_labels is bool else true
 
@@ -417,8 +433,10 @@ func _save_display_settings():
 	var settings = ConfigFile.new()
 	settings.set_value("galaxy","planet_scale",galaxy_planet_scale)
 	settings.set_value("galaxy","sun_scale",galaxy_sun_scale)
+	settings.set_value("galaxy","moon_scale",galaxy_moon_scale)
 	settings.set_value("heliocentric","planet_scale",helio_planet_scale)
 	settings.set_value("heliocentric","sun_scale",helio_sun_scale)
+	settings.set_value("heliocentric","moon_scale",helio_moon_scale)
 	settings.set_value("display","labels_enabled",labels_enabled)
 	settings.set_value("display","schema",DISPLAY_SETTINGS_VERSION)
 	var error = settings.save(settings_path)
@@ -445,22 +463,54 @@ func _set_visual_scale(value: float, sun: bool):
 	# Editing the artistic scale explicitly leaves true-size mode.
 	actual_size = false
 	_sync_scale_controls()
-	if not overview:
+	if not overview and not galaxy:
 		# Keep a close-up camera outside an enlarged body without changing its angle.
 		var ratio = _focus_radius()/old_radius
 		distance *= ratio
 		target_distance *= ratio
+	_ensure_follow_clearance()
 	settings_timer.start()
+
+func _set_moon_scale(value: float):
+	var old_radius = _focus_radius()
+	var safe = _validated_scale(value,DEFAULT_MOON_SCALE)
+	if galaxy:
+		galaxy_moon_scale = safe
+	else:
+		helio_moon_scale = safe
+	actual_size = false
+	_sync_scale_controls()
+	if not overview and not galaxy:
+		var ratio = _focus_radius()/old_radius
+		distance *= ratio
+		target_distance *= ratio
+	_ensure_follow_clearance()
+	settings_timer.start()
+
+func _ensure_follow_clearance():
+	if galaxy and not overview:
+		var minimum = _focus_radius()*2.0
+		distance = maxf(distance,minimum)
+		target_distance = maxf(target_distance,minimum)
+
+func _set_size_control(value: float, kind: String):
+	if kind=="moons":
+		_set_moon_scale(value)
+	else:
+		_set_visual_scale(value,kind=="sun")
 
 func _reset_visual_scale():
 	_set_visual_scale(DEFAULT_PLANET_SCALE,false)
 	_set_visual_scale(DEFAULT_SUN_SCALE,true)
+	_set_moon_scale(DEFAULT_MOON_SCALE)
 
 func _sync_scale_controls():
 	planet_scale_slider.set_value_no_signal(log(_planet_scale())/log(2.0))
 	sun_scale_slider.set_value_no_signal(log(_sun_scale())/log(2.0))
+	moon_scale_slider.set_value_no_signal(log(_moon_scale())/log(2.0))
 	planet_scale_input.set_value_no_signal(_planet_scale())
 	sun_scale_input.set_value_no_signal(_sun_scale())
+	moon_scale_input.set_value_no_signal(_moon_scale())
 	scale_heading.text = "РАЗМЕР ОБЪЕКТОВ · " + ("ГАЛАКТИКА" if galaxy else "ГЕЛИОЦЕНТРИЧЕСКИЙ ВИД")
 
 func _set_labels_enabled(enabled: bool):
@@ -472,9 +522,8 @@ func _set_labels_enabled(enabled: bool):
 func _update_bodies():
 	var origin = 0 if overview else selected
 	for i in range(9):
-		# A local planet/moon system has its own uniformly enlarged distance scale.
-		# Other planets are shown again in either Solar System overview.
-		bodies[i].visible = overview or i==selected
+		# Selection changes the camera target, never the contents of the scene.
+		bodies[i].visible = true
 		bodies[i].position = sim.relative_position(i,origin)*SCALE
 		bodies[i].scale = Vector3.ONE * _radius(i)
 		spins[i].rotation.y = fmod((sim.elapsed+sim.pending)*24.0/ROTATIONS[i]*TAU, TAU)
@@ -489,10 +538,10 @@ func _update_bodies():
 		if i == 3:
 			atmospheres[30].set_shader_parameter("sun_direction", light)
 		labels[i].position = bodies[i].position + Vector3.UP*(_radius(i)+0.5)
-		labels[i].visible = overview and labels_enabled
+		labels[i].visible = (overview or galaxy) and labels_enabled
 		labels[i].scale = Vector3.ONE * maxf(1.0,distance/120.0)
 	orbit_root.visible = overview and not galaxy
-	trail_instance.visible = galaxy and overview
+	trail_instance.visible = galaxy
 	_update_moons()
 
 func _record_history():
@@ -578,7 +627,12 @@ func _update_camera(delta: float):
 		# Very small moons need a local clipping range; a Solar-System far plane
 		# makes the float32 projection degenerate in the Compatibility renderer.
 		camera.near = maxf(0.000000001,distance*0.005)
-		camera.far = maxf(0.01,maxf(distance*4.0,_system_extent()*3.0))
+		var scene_extent = distance*4.0
+		for i in range(bodies.size()):
+			scene_extent = maxf(scene_extent,camera.position.distance_to(bodies[i].position)+_radius(i)*3.0)
+		for i in range(moon_nodes.size()):
+			scene_extent = maxf(scene_extent,camera.position.distance_to(moon_nodes[i].position)+_moon_radius(i)*3.0)
+		camera.far = minf(maxf(0.01,scene_extent),camera.near*2000000.0)
 	# Build from a unit direction: look_at(position) treats sub-1e-5 separations
 	# as coincident, which otherwise breaks physical-scale Phobos/Deimos views.
 	camera.basis = Basis.looking_at(-direction,Vector3.UP)
@@ -586,7 +640,7 @@ func _update_camera(delta: float):
 func _update_labels():
 	var used: Array[Rect2] = []
 	for label in labels:
-		label.visible = overview and labels_enabled and not camera.is_position_behind(label.position)
+		label.visible = (overview or galaxy) and labels_enabled and not camera.is_position_behind(label.position)
 		if not label.visible:
 			continue
 		var point = camera.unproject_position(label.position)
@@ -599,7 +653,7 @@ func _update_labels():
 			used.append(box)
 	for i in range(moon_labels.size()):
 		var label = moon_labels[i]
-		label.visible = labels_enabled and satellite_system_view and moon_nodes[i].visible and not camera.is_position_behind(label.position)
+		label.visible = labels_enabled and i!=selected_moon and moon_nodes[i].visible and camera.is_position_in_frustum(label.position)
 		if not label.visible:
 			continue
 		var depth = -camera.to_local(label.position).z
@@ -621,11 +675,13 @@ func _select(index: int):
 	overview = false
 	_sync_scale_controls()
 	_refresh_moon_picker()
-	target_distance = _radius(index)*(7.5 if index==7 else (7.0 if index==6 else 4.4))
-	distance = target_distance
-	var p = sim.position(index)-sim.position(0)
-	yaw = atan2(-p.x,-p.z) + 0.55 if index != 0 else 0.5
-	pitch = 0.22
+	if not galaxy:
+		target_distance = _radius(index)*(7.5 if index==7 else (7.0 if index==6 else 4.4))
+		distance = target_distance
+		var p = sim.position(index)-sim.position(0)
+		yaw = atan2(-p.x,-p.z) + 0.55 if index != 0 else 0.5
+		pitch = 0.22
+	_ensure_follow_clearance()
 	for i in range(select_buttons.size()):
 		select_buttons[i].button_pressed = i == index
 
@@ -878,7 +934,7 @@ func _build_ui():
 	help.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	row.add_child(help)
 
-func _scale_row(parent: VBoxContainer, caption: String, value: float, sun: bool):
+func _scale_row(parent: VBoxContainer, caption: String, value: float, kind: String):
 	var row = HBoxContainer.new()
 	row.add_theme_constant_override("separation",12)
 	parent.add_child(row)
@@ -895,7 +951,7 @@ func _scale_row(parent: VBoxContainer, caption: String, value: float, sun: bool)
 	slider.custom_minimum_size = Vector2(100,44)
 	slider.focus_mode = Control.FOCUS_NONE
 	slider.tooltip_text = "Визуальное увеличение от 0.1× до 50×; орбиты и гравитация не меняются."
-	slider.value_changed.connect(func(exponent): _set_visual_scale(snappedf(pow(2.0,exponent),0.1),sun))
+	slider.value_changed.connect(func(exponent): _set_size_control(snappedf(pow(2.0,exponent),0.1),kind))
 	row.add_child(slider)
 	var input = SpinBox.new()
 	input.min_value = VISUAL_SCALE_MIN
@@ -904,9 +960,12 @@ func _scale_row(parent: VBoxContainer, caption: String, value: float, sun: bool)
 	input.value = value
 	input.suffix = "×"
 	input.custom_minimum_size = Vector2(128,44)
-	input.value_changed.connect(_set_visual_scale.bind(sun))
+	input.value_changed.connect(_set_size_control.bind(kind))
 	row.add_child(input)
-	if sun:
+	if kind=="moons":
+		moon_scale_slider = slider
+		moon_scale_input = input
+	elif kind=="sun":
 		sun_scale_slider = slider
 		sun_scale_input = input
 	else:
@@ -914,7 +973,7 @@ func _scale_row(parent: VBoxContainer, caption: String, value: float, sun: bool)
 		planet_scale_input = input
 
 func _build_scale_controls(root: Control):
-	var box = _box(root,Vector2(270,574),520)
+	var box = _box(root,Vector2(270,522),520)
 	size_panel = box.get_parent()
 	var heading = HBoxContainer.new()
 	box.add_child(heading)
@@ -924,8 +983,9 @@ func _build_scale_controls(root: Control):
 	var reset = _button("Сброс",_reset_visual_scale)
 	reset.custom_minimum_size.y = 32
 	heading.add_child(reset)
-	_scale_row(box,"Планеты",_planet_scale(),false)
-	_scale_row(box,"Солнце",_sun_scale(),true)
+	_scale_row(box,"Планеты",_planet_scale(),"planets")
+	_scale_row(box,"Солнце",_sun_scale(),"sun")
+	_scale_row(box,"Спутники",_moon_scale(),"moons")
 	scale_note = _label("",12,Color("73929f"))
 	box.add_child(scale_note)
 
@@ -933,6 +993,8 @@ func _update_readout():
 	var date = Time.get_datetime_dict_from_unix_time((sim.epoch_jd-2440587.5+sim.elapsed+sim.pending)*86400.0)
 	clock_label.text = "%02d.%02d.%04d  ·  %02d:%02d" % [date.day,date.month,date.year,date.hour,date.minute]
 	frame_label.text = ("ГАЛАКТИЧЕСКИЙ ПОЛЁТ" if galaxy else "ГЕЛИОЦЕНТРИЧЕСКИЙ ВИД") + "   /   " + ("РАЗМЕРЫ 1:1" if actual_size else "РАЗМЕРЫ УВЕЛИЧЕНЫ")
+	if galaxy and not overview:
+		frame_label.text += "   /   СЛЕЖЕНИЕ"
 	scale_note.text = "Режим 1:1. Измените размер, чтобы включить увеличение." if actual_size else "Только изображение · 0.1–50× · Возможны перекрытия"
 	title_label.text = NAMES[selected]
 	var radius_au = sim.position(selected).distance_to(sim.position(0))

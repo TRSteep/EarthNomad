@@ -47,9 +47,9 @@ func run():
 	app.sun_scale_slider.value = log(8.0)/log(2.0)
 	check(is_equal_approx(app._radius(0),app.DISPLAY_RADII[0]*8.0),"Independent Sun slider")
 	app._select(3)
-	var camera_ratio: float = app.target_distance/app._radius(3)
+	var tracked_distance: float = app.target_distance
 	app._set_visual_scale(25.0,false)
-	check(is_equal_approx(app.target_distance/app._radius(3),camera_ratio),"Close-up remains outside enlarged body")
+	check(is_equal_approx(app.target_distance,tracked_distance),"Galactic tracking preserves camera distance while resizing planets")
 	app._save_display_settings()
 	app.galaxy_planet_scale = 1.0
 	app._load_display_settings()
@@ -152,7 +152,7 @@ func run():
 	check(app.moon_labels.all(func(label): return not label.visible),"Satellite labels honor the visibility switch")
 	app._system_overview()
 	app._update_bodies()
-	check(app.moon_nodes.all(func(body): return not body.visible),"Solar overview hides enlarged local satellite systems")
+	check(app.moon_nodes.all(func(body): return body.visible),"Solar overview keeps every satellite visible")
 	check(app.bodies.all(func(body): return body.visible),"Solar overview restores all planets")
 	check(app.sim.p==moon_physics_before,"Satellite rendering never modifies planetary integrator")
 	check(app.ring_nodes.has(6) and app.ring_nodes.has(7),"Saturn and Uranus ring meshes")
@@ -170,6 +170,72 @@ func run():
 	app._reset()
 	app._update_bodies()
 	check(app.moon_nodes[0].position.distance_to(initial_moon)<0.00001,"Time reset restores satellite phase")
+	# Galactic object selection is tracking, not an isolated close-up.
+	app._toggle_galaxy()
+	app._update_bodies()
+	app.distance = app.target_distance
+	app._update_camera(1.0)
+	var follow_distance: float = app.distance
+	var follow_yaw: float = app.yaw
+	var follow_pitch: float = app.pitch
+	for i in range(9):
+		app._select(i)
+		app._update_bodies()
+		app._update_camera(1.0)
+		check(app.galaxy and not app.overview,"Galactic selection follows target")
+		check(app.distance==follow_distance and app.yaw==follow_yaw and app.pitch==follow_pitch,"Selection keeps flight framing")
+		check(app.bodies.all(func(body): return body.visible) and app.moon_nodes.all(func(body): return body.visible),"All planets and satellites remain visible while tracking")
+		check(app.trail_instance.visible,"Tracking retains galactic trajectories")
+		var offset = app.camera.position-app.bodies[i].position
+		app.sim.step()
+		app._update_bodies()
+		app._update_camera(1.0)
+		check((app.camera.position-app.bodies[i].position).distance_to(offset)<0.001,"Camera follows the moving target")
+	app._select_moon(0)
+	app._update_bodies()
+	app._update_camera(1.0)
+	check(app.galaxy and app.distance==follow_distance and app.trail_instance.visible,"Satellite selection also preserves galactic flight")
+	# Independent satellite size must change only radius, not positions or planet sizes.
+	var moon_positions: Array[Vector3] = []
+	for body in app.moon_nodes:
+		moon_positions.append(body.position)
+	var parent_radius: float = app._radius(3)
+	var moon_radius: float = app._moon_radius(0)
+	var old_moon_scale: float = app._moon_scale()
+	app.moon_scale_input.value = 12.5
+	app._update_bodies()
+	check(is_equal_approx(app._moon_radius(0),moon_radius*12.5/old_moon_scale),"Satellite spinbox controls radius")
+	check(app._radius(3)==parent_radius and app.distance==follow_distance,"Satellite size preserves planet size and flight camera")
+	for i in range(app.moon_nodes.size()):
+		check(app.moon_nodes[i].position==moon_positions[i],"Satellite size does not move orbits")
+	app._system_overview()
+	check(app.moon_scale_input.value==4.0,"Heliocentric satellite scale is independent")
+	app.moon_scale_slider.value = log(7.5)/log(2.0)
+	check(is_equal_approx(app.helio_moon_scale,7.5),"Satellite slider controls heliocentric size")
+	app._save_display_settings()
+	app.helio_moon_scale = 1.0
+	app.galaxy_moon_scale = 1.0
+	app._load_display_settings()
+	check(app.helio_moon_scale==7.5 and app.galaxy_moon_scale==12.5,"Both satellite scale preferences survive reload")
+	app._set_moon_scale(500.0)
+	check(app.helio_moon_scale==50.0,"Satellite size respects the 50x limit")
+	app._toggle_scale()
+	check(is_equal_approx(app._moon_radius(0),1737.4/149597870.7*20.0),"Physical satellite size ignores exaggeration")
+	app._reset_visual_scale()
+	check(app.helio_moon_scale==4.0,"Display reset restores satellite default")
+	legacy.set_value("display","schema",2)
+	legacy.set_value("galaxy","planet_scale",20.0)
+	legacy.set_value("galaxy","sun_scale",1.0)
+	legacy.save(app.settings_path)
+	app._load_display_settings()
+	check(app.galaxy_planet_scale==20.0 and app.galaxy_sun_scale==1.0,"Schema 2 custom sizes are not remigrated")
+	app._toggle_galaxy()
+	app.distance = 1.0
+	app.target_distance = 1.0
+	app._select(0)
+	check(app.distance>=app._radius(0)*2.0,"Selecting a large target cannot put tracking camera inside it")
+	app._set_visual_scale(50.0,true)
+	check(app.distance>=app._radius(0)*2.0,"Growing a tracked target preserves camera clearance")
 	print("APP: ", "PASS" if failures==0 else "FAIL")
 	app.queue_free()
 	await process_frame

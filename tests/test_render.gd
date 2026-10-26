@@ -26,7 +26,20 @@ func run():
 		app._select(i)
 		await process_frame
 		await RenderingServer.frame_post_draw
-	print("RENDER: ","PASS" if failures==0 else "FAIL", " (20 satellites in both scales; Saturn and Uranus rings)")
+	app._toggle_galaxy()
+	for i in range(9):
+		app._select(i)
+		await process_frame
+		await RenderingServer.frame_post_draw
+		if not app.trail_instance.visible or not app.moon_nodes.all(func(body): return body.visible):
+			push_error("Galactic tracking hides trajectories or satellites")
+			failures += 1
+	app.moon_scale_input.value = 50.0
+	app._system_overview()
+	app.moon_scale_input.value = 50.0
+	await process_frame
+	await RenderingServer.frame_post_draw
+	print("RENDER: ","PASS" if failures==0 else "FAIL", " (20 satellites in both scales; rings; nine galactic targets; satellite sizes)")
 	app.queue_free()
 	await process_frame
 	DirAccess.remove_absolute("user://test-render.cfg")
