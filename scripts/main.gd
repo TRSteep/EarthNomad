@@ -1,6 +1,7 @@
 extends Node3D
 
 const Physics = preload("res://scripts/physics.gd")
+const Satellites = preload("res://scripts/satellites.gd")
 const IDS = ["sun", "mercury", "venus", "earth", "mars", "jupiter", "saturn", "uranus", "neptune"]
 const NAMES = ["Солнце", "Меркурий", "Венера", "Земля", "Марс", "Юпитер", "Сатурн", "Уран", "Нептун"]
 const KINDS = ["ЗВЕЗДА · G2V", "КАМЕННАЯ ПЛАНЕТА", "КАМЕННАЯ ПЛАНЕТА", "НАШ ДОМ", "КАМЕННАЯ ПЛАНЕТА", "ГАЗОВЫЙ ГИГАНТ", "ГАЗОВЫЙ ГИГАНТ", "ЛЕДЯНОЙ ГИГАНТ", "ЛЕДЯНОЙ ГИГАНТ"]
@@ -19,6 +20,16 @@ const SETTINGS_PATH = "user://display.cfg"
 const SPEEDS = [0.000011574074,0.0416667,1.0,10.0,40.0,120.0]
 const SPEED_LABELS = ["Реальное время", "1 час / сек", "1 день / сек", "10 дней / сек", "40 дней / сек", "120 дней / сек"]
 var sim = Physics.new()
+var satellites = Satellites.new()
+var moon_nodes: Array[Node3D] = []
+var moon_materials: Array[ShaderMaterial] = []
+var moon_labels: Array[Label3D] = []
+var moon_orbits: Array[MeshInstance3D] = []
+var ring_nodes: Dictionary = {}
+var selected_moon = -1
+var satellite_system_view = false
+var moon_picker: OptionButton
+var satellite_system_button: Button
 var bodies: Array[Node3D] = []
 var spins: Array[Node3D] = []
 var materials: Array[ShaderMaterial] = []
@@ -81,6 +92,7 @@ func _ready():
 	initial_energy = sim.energy()
 	_build_environment()
 	_build_bodies()
+	_build_moons()
 	_build_orbits()
 	add_child(trail_instance)
 	_build_ui()
@@ -88,6 +100,10 @@ func _ready():
 	for argument in startup_args:
 		if argument.begins_with("--planet="):
 			_select(clampi(int(argument.get_slice("=",1)),0,8))
+		if argument.begins_with("--moon="):
+			_select_moon(clampi(int(argument.get_slice("=",1)),0,satellites.data.size()-1))
+	if "--satellites" in startup_args:
+		_satellite_system()
 	if "--overview" in startup_args:
 		_set_overview()
 	if "--galaxy" in startup_args:
@@ -153,6 +169,11 @@ func _build_bodies():
 		bodies.append(body)
 		var axis = Node3D.new()
 		axis.rotation.z = deg_to_rad(TILTS[i])
+		if i in [6,7,8]:
+			var pole = Satellites.pole(40.589,83.537) if i==6 else Satellites.pole(257.311,-15.175)
+			if i==8:
+				pole = Satellites.pole(299.36,43.46)
+			axis.quaternion = Quaternion(Vector3.UP,pole.normalized())
 		body.add_child(axis)
 		var spin = Node3D.new()
 		axis.add_child(spin)
@@ -186,8 +207,8 @@ func _build_bodies():
 			atmosphere.set_shader_parameter("corona", i == 0)
 			_sphere(1.5 if i == 0 else 1.018, atmosphere, axis)
 			atmospheres[i] = atmosphere
-		if i == 6:
-			_build_rings(axis)
+		if i in [6,7]:
+			_build_rings(axis,i)
 		var label = Label3D.new()
 		label.text = NAMES[i]
 		label.font_size = 40
@@ -198,16 +219,19 @@ func _build_bodies():
 		add_child(label)
 		labels.append(label)
 
-func _build_rings(parent: Node3D):
+func _build_rings(parent: Node3D, planet: int):
 	var mesh = ImmediateMesh.new()
 	mesh.surface_begin(Mesh.PRIMITIVE_TRIANGLES)
-	for j in range(256):
-		var a = TAU*float(j)/256.0
-		var b = TAU*float(j+1)/256.0
-		var inner_a = Vector3(cos(a),0,sin(a))*1.24
-		var outer_a = Vector3(cos(a),0,sin(a))*2.27
-		var inner_b = Vector3(cos(b),0,sin(b))*1.24
-		var outer_b = Vector3(cos(b),0,sin(b))*2.27
+	var inner = 1.10
+	var outer = 2.42 if planet==6 else 4.25
+	var segments = 512 if not OS.has_feature("mobile") else 256
+	for j in range(segments):
+		var a = TAU*float(j)/segments
+		var b = TAU*float(j+1)/segments
+		var inner_a = Vector3(cos(a),0,sin(a))*inner
+		var outer_a = Vector3(cos(a),0,sin(a))*outer
+		var inner_b = Vector3(cos(b),0,sin(b))*inner
+		var outer_b = Vector3(cos(b),0,sin(b))*outer
 		for point in [inner_a,outer_a,outer_b,inner_a,outer_b,inner_b]:
 			mesh.surface_add_vertex(point)
 	mesh.surface_end()
@@ -215,9 +239,124 @@ func _build_rings(parent: Node3D):
 	instance.mesh = mesh
 	var material = ShaderMaterial.new()
 	material.shader = load("res://shaders/rings.gdshader")
+	material.set_shader_parameter("ring_kind",1 if planet==6 else 2)
+	materials[planet].set_shader_parameter("ring_kind",1 if planet==6 else 2)
 	instance.material_override = material
 	parent.add_child(instance)
-	atmospheres[60] = material
+	atmospheres[planet*10] = material
+	ring_nodes[planet] = instance
+
+func _build_moons():
+	for i in range(satellites.data.size()):
+		var d: Dictionary = satellites.data[i]
+		var body = Node3D.new()
+		body.name = d.id
+		add_child(body)
+		moon_nodes.append(body)
+		var material = ShaderMaterial.new()
+		material.shader = load("res://shaders/planet.gdshader")
+		material.set_shader_parameter("surface_map",_texture("res://assets/textures/moons/%s.jpg" % d.id))
+		material.set_shader_parameter("haze",d.id=="titan")
+		moon_materials.append(material)
+		var surface = _sphere(1.0,material,body)
+		if d.id in ["phobos","deimos"]:
+			surface.scale = Vector3(1.25,0.92,0.83)
+		var label = Label3D.new()
+		label.text = d.name
+		label.font_size = 32
+		label.pixel_size = 0.025
+		label.modulate = Color("c3d2df")
+		label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+		add_child(label)
+		moon_labels.append(label)
+		var mesh = ImmediateMesh.new()
+		mesh.surface_begin(Mesh.PRIMITIVE_LINE_STRIP)
+		for k in range(193):
+			mesh.surface_set_color(Color(0.4,0.6,0.75,0.19))
+			mesh.surface_add_vertex(satellites.position_km(i,sim.epoch_jd,TAU*k/192.0)/RADII[int(d.parent)])
+		mesh.surface_end()
+		var orbit = MeshInstance3D.new()
+		orbit.mesh = mesh
+		orbit.material_override = _line_material()
+		add_child(orbit)
+		moon_orbits.append(orbit)
+
+func _moon_radius(index: int) -> float:
+	var d: Dictionary = satellites.data[index]
+	return _radius(int(d.parent))*d.radius_km/RADII[int(d.parent)]
+
+func _focus_radius() -> float:
+	return _moon_radius(selected_moon) if selected_moon>=0 else _radius(selected)
+
+func _system_extent() -> float:
+	var extent = _radius(selected)*2.5
+	for i in satellites.indices(selected):
+		var d: Dictionary = satellites.data[i]
+		extent = maxf(extent,d.a_km*(1.0+d.e)/RADII[selected]*_radius(selected))
+	return extent
+
+func _refresh_moon_picker():
+	moon_picker.clear()
+	moon_picker.add_item("Выбрать спутник…",1000)
+	for i in satellites.indices(selected):
+		moon_picker.add_item(satellites.data[i].name,i)
+	moon_picker.disabled = moon_picker.item_count==1
+	satellite_system_button.disabled = moon_picker.disabled
+	if selected_moon>=0:
+		moon_picker.select(moon_picker.get_item_index(selected_moon))
+
+func _select_moon(index: int):
+	selected = int(satellites.data[index].parent)
+	selected_moon = index
+	satellite_system_view = false
+	overview = false
+	_sync_scale_controls()
+	_refresh_moon_picker()
+	distance = _focus_radius()*4.5
+	target_distance = distance
+	var p = sim.relative_position(selected,0)
+	yaw = atan2(-p.x,-p.z)+0.55
+	pitch = 0.22
+	for i in range(select_buttons.size()):
+		select_buttons[i].button_pressed = i==selected
+
+func _satellite_system():
+	if satellites.indices(selected).is_empty():
+		return
+	selected_moon = -1
+	satellite_system_view = true
+	overview = false
+	_refresh_moon_picker()
+	target_distance = _system_extent()*2.8
+	distance = target_distance
+	pitch = 0.55
+
+func _update_moons():
+	var jd = sim.epoch_jd+sim.elapsed+sim.pending
+	# The planetary integrator contains Earth+Moon mass once, at their barycenter.
+	# Split their local display positions; do not add lunar mass to the integrator again.
+	if selected==3 and not overview:
+		var relative = satellites.position_km(0,jd)/RADII[3]*_radius(3)
+		bodies[3].position -= relative*0.0121505856
+	for i in range(moon_nodes.size()):
+		var d: Dictionary = satellites.data[i]
+		var parent = int(d.parent)
+		var units = _radius(parent)/RADII[parent]
+		var relative = satellites.position_km(i,jd)*units
+		var visible = not overview and parent==selected
+		moon_nodes[i].visible = visible
+		moon_orbits[i].visible = visible and satellite_system_view
+		moon_orbits[i].position = bodies[parent].position
+		moon_orbits[i].scale = Vector3.ONE*_radius(parent)
+		moon_nodes[i].position = bodies[parent].position+relative
+		moon_nodes[i].scale = Vector3.ONE*_moon_radius(i)
+		moon_nodes[i].look_at(bodies[parent].position,satellites.orbit_normal(i))
+		var light = (-sim.relative_position(parent,0)).normalized()
+		moon_materials[i].set_shader_parameter("sun_direction",light)
+		moon_materials[i].set_shader_parameter("parent_center",bodies[parent].position)
+		moon_materials[i].set_shader_parameter("parent_radius",_radius(parent))
+		moon_labels[i].position = moon_nodes[i].position+Vector3.UP*(_moon_radius(i)+distance*0.008)
+		moon_labels[i].scale = Vector3.ONE*maxf(distance,0.000001)*0.025
 
 func _line_material() -> StandardMaterial3D:
 	var mat = StandardMaterial3D.new()
@@ -291,7 +430,7 @@ func _exit_tree():
 		_save_display_settings()
 
 func _set_visual_scale(value: float, sun: bool):
-	var old_radius = _radius(selected)
+	var old_radius = _focus_radius()
 	var safe = _validated_scale(value,DEFAULT_SUN_SCALE if sun else DEFAULT_PLANET_SCALE)
 	if galaxy:
 		if sun:
@@ -308,7 +447,7 @@ func _set_visual_scale(value: float, sun: bool):
 	_sync_scale_controls()
 	if not overview:
 		# Keep a close-up camera outside an enlarged body without changing its angle.
-		var ratio = _radius(selected)/old_radius
+		var ratio = _focus_radius()/old_radius
 		distance *= ratio
 		target_distance *= ratio
 	settings_timer.start()
@@ -333,6 +472,9 @@ func _set_labels_enabled(enabled: bool):
 func _update_bodies():
 	var origin = 0 if overview else selected
 	for i in range(9):
+		# A local planet/moon system has its own uniformly enlarged distance scale.
+		# Other planets are shown again in either Solar System overview.
+		bodies[i].visible = overview or i==selected
 		bodies[i].position = sim.relative_position(i,origin)*SCALE
 		bodies[i].scale = Vector3.ONE * _radius(i)
 		spins[i].rotation.y = fmod((sim.elapsed+sim.pending)*24.0/ROTATIONS[i]*TAU, TAU)
@@ -341,15 +483,17 @@ func _update_bodies():
 		materials[i].set_shader_parameter("phase", sim.elapsed)
 		if atmospheres.has(i):
 			atmospheres[i].set_shader_parameter("sun_direction", light)
-		if i == 6:
-			atmospheres[60].set_shader_parameter("sun_direction", light)
+		if i in [6,7]:
+			atmospheres[i*10].set_shader_parameter("sun_direction",light)
+			materials[i].set_shader_parameter("world_to_ring",ring_nodes[i].global_transform.affine_inverse())
 		if i == 3:
 			atmospheres[30].set_shader_parameter("sun_direction", light)
 		labels[i].position = bodies[i].position + Vector3.UP*(_radius(i)+0.5)
 		labels[i].visible = overview and labels_enabled
 		labels[i].scale = Vector3.ONE * maxf(1.0,distance/120.0)
 	orbit_root.visible = overview and not galaxy
-	trail_instance.visible = galaxy
+	trail_instance.visible = galaxy and overview
+	_update_moons()
 
 func _record_history():
 	history.append({"day":sim.elapsed,"p":sim.p.duplicate()})
@@ -421,13 +565,23 @@ func _process(delta: float):
 func _update_camera(delta: float):
 	distance = lerpf(distance,target_distance,1.0-exp(-delta*8.0))
 	var target = Vector3.ZERO if overview else bodies[selected].position
+	if selected_moon>=0 and not overview:
+		target = moon_nodes[selected_moon].position
 	if galaxy and overview:
 		target = Physics.galactic_offset(-240.0)*SCALE
 	var direction = Vector3(sin(yaw)*cos(pitch),sin(pitch),cos(yaw)*cos(pitch))
 	camera.position = target + direction*distance
-	camera.near = maxf(0.000001, minf(distance*0.001,0.1))
-	camera.far = maxf(20000.0,distance*2.0+2000.0)
-	camera.look_at(target)
+	if overview:
+		camera.near = maxf(0.000001,minf(distance*0.001,0.1))
+		camera.far = maxf(20000.0,distance*2.0+2000.0)
+	else:
+		# Very small moons need a local clipping range; a Solar-System far plane
+		# makes the float32 projection degenerate in the Compatibility renderer.
+		camera.near = maxf(0.000000001,distance*0.005)
+		camera.far = maxf(0.01,maxf(distance*4.0,_system_extent()*3.0))
+	# Build from a unit direction: look_at(position) treats sub-1e-5 separations
+	# as coincident, which otherwise breaks physical-scale Phobos/Deimos views.
+	camera.basis = Basis.looking_at(-direction,Vector3.UP)
 
 func _update_labels():
 	var used: Array[Rect2] = []
@@ -443,12 +597,31 @@ func _update_labels():
 				break
 		if label.visible:
 			used.append(box)
+	for i in range(moon_labels.size()):
+		var label = moon_labels[i]
+		label.visible = labels_enabled and satellite_system_view and moon_nodes[i].visible and not camera.is_position_behind(label.position)
+		if not label.visible:
+			continue
+		var depth = -camera.to_local(label.position).z
+		var height = maxf(get_viewport().get_visible_rect().size.y,1.0)
+		label.scale = Vector3.ONE*depth*2.0*tan(deg_to_rad(camera.fov*0.5))*18.0/(height*label.font_size*label.pixel_size)
+		var point = camera.unproject_position(label.position)
+		var box = Rect2(point-Vector2(48,10),Vector2(96,20))
+		for occupied in used:
+			if occupied.intersects(box):
+				label.visible = false
+				break
+		if label.visible:
+			used.append(box)
 
 func _select(index: int):
 	selected = index
+	selected_moon = -1
+	satellite_system_view = false
 	overview = false
 	_sync_scale_controls()
-	target_distance = _radius(index)*(7.0 if index == 6 else 4.4)
+	_refresh_moon_picker()
+	target_distance = _radius(index)*(7.5 if index==7 else (7.0 if index==6 else 4.4))
 	distance = target_distance
 	var p = sim.position(index)-sim.position(0)
 	yaw = atan2(-p.x,-p.z) + 0.55 if index != 0 else 0.5
@@ -458,6 +631,9 @@ func _select(index: int):
 
 func _set_overview():
 	overview = true
+	selected_moon = -1
+	satellite_system_view = false
+	_refresh_moon_picker()
 	_sync_scale_controls()
 	target_distance = 2000.0 if galaxy else 1750.0
 	pitch = 0.42 if galaxy else 0.85
@@ -483,7 +659,12 @@ func _inner_overview():
 func _toggle_scale():
 	actual_size = not actual_size
 	if not overview:
-		_select(selected)
+		if selected_moon>=0:
+			_select_moon(selected_moon)
+		elif satellite_system_view:
+			_satellite_system()
+		else:
+			_select(selected)
 
 func _reset():
 	sim.reset()
@@ -497,8 +678,10 @@ func _toggle_pause():
 	pause_button.text = "Ⅱ  Пауза" if playing else "▶  Продолжить"
 
 func _zoom(factor: float):
-	var lower = 8.0 if overview else _radius(selected)*2.0
-	var upper = 3500.0 if overview else maxf(3500.0,_radius(selected)*100.0)
+	var lower = 8.0 if overview else _focus_radius()*2.0
+	var upper = 3500.0 if overview else maxf(3500.0,_focus_radius()*100.0)
+	if satellite_system_view:
+		upper = maxf(upper,_system_extent()*8.0)
 	target_distance = clampf(target_distance*factor,lower,upper)
 
 func _unhandled_input(event: InputEvent):
@@ -626,6 +809,20 @@ func _build_ui():
 		button.add_theme_color_override("font_color",COLORS[i])
 		left.add_child(button)
 		select_buttons.append(button)
+	left.add_child(_label("СПУТНИКИ",12,Color("73929f")))
+	moon_picker = OptionButton.new()
+	moon_picker.custom_minimum_size.y = 44
+	moon_picker.focus_mode = Control.FOCUS_NONE
+	moon_picker.item_selected.connect(func(index):
+		var id = moon_picker.get_item_id(index)
+		if id>=0 and id<satellites.data.size():
+			_select_moon(id)
+		else:
+			_select(selected)
+	)
+	left.add_child(moon_picker)
+	satellite_system_button = _button("Планета + спутники",_satellite_system)
+	left.add_child(satellite_system_button)
 	var right = _box(root,Vector2(1130,112),282)
 	navigation_box = right
 	(right.get_parent() as Control).anchor_left = 1.0
@@ -744,4 +941,9 @@ func _update_readout():
 		speed += pow(sim.v[selected*3+k]-sim.v[k],2)
 	speed = sqrt(speed)*Physics.AU_KM/86400.0
 	detail_label.text = "%s\n\nРадиус          %s км\nОт Солнца     %.3f а.е.\nСкорость       %.2f км/с\nНаклон оси    %.2f°\n\n%s\nΔE / E₀         %.8f" % [KINDS[selected],str(int(RADII[selected])),radius_au,speed,180.0-TILTS[selected] if selected in [2,7] else TILTS[selected],"9 тел  ·  шаг 6 часов",abs((sim.energy()-initial_energy)/initial_energy)]
+	if selected_moon>=0:
+		var d: Dictionary = satellites.data[selected_moon]
+		title_label.text = d.name
+		var km = satellites.position_km(selected_moon,sim.epoch_jd+sim.elapsed+sim.pending).length()
+		detail_label.text = "СПУТНИК · %s\n\nРадиус          %.1f км\nОт планеты   %.0f км\nПериод         %.4f сут\nЭксцентрис.  %.4f\nНаклон          %.2f°\n\nКеплер · элементы JPL" % [NAMES[selected],d.radius_km,km,d.period_days,d.e,d.inclination_deg]
 

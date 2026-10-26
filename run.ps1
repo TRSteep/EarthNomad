@@ -1,4 +1,4 @@
-param([switch]$Editor, [switch]$Test, [switch]$Build)
+param([switch]$Editor, [switch]$Test, [switch]$RenderTest, [switch]$Build)
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
 $engine = Join-Path $PSScriptRoot '.tools/Godot_v4.5-stable_win64_console.exe'
@@ -10,7 +10,11 @@ $version = (Get-Content (Join-Path $PSScriptRoot 'VERSION') -Raw).Trim()
 if ($Test) {
     & $engine --headless --path . --script tests/test_physics.gd
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    & $engine --headless --path . --script tests/test_satellites.gd
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     & $engine --headless --path . --script tests/test_app.gd
+} elseif ($RenderTest) {
+    & $engine --path . --script tests/test_render.gd
 } elseif ($Build) {
     & $engine --headless --path . --editor --import --quit
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
